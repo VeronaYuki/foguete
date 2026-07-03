@@ -35,6 +35,10 @@ Phase transitions and restarts must go through `Flow` — its `_change()`/`resta
 
 **Audio.** `sfx.gd` (`Sfx`) synthesizes all sounds from waveforms at startup. Each phase instantiates its own `Sfx` node. New sounds are added as `_gen_*()` generator functions there.
 
+**Face control.** Phase 3 supports webcam control: `tools/face_tracker.py` (Python + OpenCV, runs outside Godot) streams head position and smile state as JSON over UDP port 46464 and JPEG preview frames (mirror view + tracking overlay) over UDP 46465; `scripts/face_control.gd` (`FaceControl`) listens, exposes `head`/`smiling`/`active`/`preview_texture` plus a `smile_started` signal, and best-effort auto-launches the tracker (venv expected at `~/.local/share/foguete/venv`; uses `flatpak-spawn --host` when Godot runs in flatpak). `runner_main.gd` steers from `face.head`, triggers a 2 s speed boost on `smile_started`, and shows the preview bottom-right in the HUD. Everything degrades to WASD when no tracker/face is present — never make face control mandatory.
+
+**Voice control.** `scripts/voice_control.gd` (`VoiceControl`) is fully in-engine: it captures the microphone via an `AudioEffectCapture` on a silenced `MicCapture` bus (`audio/driver/enable_input=true` in `project.godot`) and emits `piu_detected` on short loud high-pitched bursts — say "PIU!" to fire in Phase 3. The bus is created once and reused across scene reloads.
+
 **Conventions.**
 - `.uid` files next to scripts/shaders are Godot metadata — keep them paired with their file when renaming/moving.
 - Input actions (move, fire, dash, interact, restart, quit, plus the mini-game's thrust/pitch/roll) are defined in `project.godot`; use action names, not raw keycodes.
