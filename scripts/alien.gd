@@ -26,6 +26,16 @@ var _leg_pivots: Array[Node3D] = []
 var _tail_pivot: Node3D
 var _vis: Node3D
 var _screech_cd := 0.0
+var _gait_step := PI * 0.5
+var _model_holder: Node3D
+
+const LUCAS_TEX := "res://assets/lucas.png"
+const TARGET_HEIGHT := 2.0
+# downloaded 3D hunters — picked at random per spawn
+const ENEMY_GLBS := [
+	"res://bald-cartoon-casual-male-character/source/Unnamed project.glb",
+	"res://walter-white/source/walter white.glb",
+]
 
 
 func _ready() -> void:
@@ -41,7 +51,317 @@ func _ready() -> void:
 	col.position = Vector3(0, 0.95, 0)
 	add_child(col)
 
-	_build_body()
+	var glbs := ENEMY_GLBS.filter(func (p: String) -> bool: return ResourceLoader.exists(p))
+	if not glbs.is_empty():
+		cap.height = 1.9
+		col.position = Vector3(0, 1.0, 0)
+		_build_glb_body(glbs[randi() % glbs.size()])
+	elif ResourceLoader.exists(LUCAS_TEX):
+		cap.height = 1.9
+		col.position = Vector3(0, 1.0, 0)
+		_build_lucas_body()
+	else:
+		_build_body()
+
+
+func _build_glb_body(path: String) -> void:
+	_vis = Node3D.new()
+	add_child(_vis)
+
+	_model_holder = Node3D.new()
+	_vis.add_child(_model_holder)
+
+	var packed := load(path) as PackedScene
+	var model := packed.instantiate()
+	_model_holder.add_child(model)
+
+	# auto-fit once transforms are live in the tree
+	_fit_model.call_deferred(model)
+
+	# eerie red underglow so the hunter reads as a threat in the dark
+	var glow := OmniLight3D.new()
+	glow.position = Vector3(0, 0.8, 0)
+	glow.omni_range = 4.5
+	glow.light_energy = 0.4
+	glow.light_color = Color(0.9, 0.2, 0.12)
+	_vis.add_child(glow)
+
+	# play a built-in animation if the model ships one
+	var anim := _find_anim_player(model)
+	if anim and not anim.get_animation_list().is_empty():
+		var names := anim.get_animation_list()
+		var pick := names[0]
+		for n in names:
+			var ln := String(n).to_lower()
+			if ln.contains("walk") or ln.contains("idle") or ln.contains("run"):
+				pick = n
+				break
+		var a := anim.get_animation(pick)
+		if a:
+			a.loop_mode = Animation.LOOP_LINEAR
+		anim.play(pick)
+
+
+func _fit_model(model: Node3D) -> void:
+	if not is_instance_valid(model) or not is_inside_tree():
+		return
+	var aabb := _local_aabb(_model_holder, model)
+	if aabb.size.y <= 0.001:
+		return
+	# center on x/z, drop feet to y=0, then scale to human height
+	model.position -= Vector3(
+		aabb.position.x + aabb.size.x * 0.5,
+		aabb.position.y,
+		aabb.position.z + aabb.size.z * 0.5)
+	_model_holder.scale = Vector3.ONE * (TARGET_HEIGHT / aabb.size.y)
+	# models export facing +Z, which matches the alien's forward — no turn needed
+
+
+func _local_aabb(space: Node3D, root: Node3D) -> AABB:
+	var inv := space.global_transform.affine_inverse()
+	var merged := AABB()
+	var started := false
+	var stack: Array[Node] = [root]
+	while not stack.is_empty():
+		var n: Node = stack.pop_back()
+		if n is VisualInstance3D:
+			var vi := n as VisualInstance3D
+			var a: AABB = (inv * vi.global_transform) * vi.get_aabb()
+			if started:
+				merged = merged.merge(a)
+			else:
+				merged = a
+				started = true
+		for c in n.get_children():
+			stack.append(c)
+	return merged
+
+
+func _find_anim_player(n: Node) -> AnimationPlayer:
+	if n is AnimationPlayer:
+		return n as AnimationPlayer
+	for c in n.get_children():
+		var found := _find_anim_player(c)
+		if found:
+			return found
+	return null
+
+
+func _build_lucas_body() -> void:
+	# Humanoid astronaut standing upright, facing +Z (toward the player).
+	_vis = Node3D.new()
+	add_child(_vis)
+	_gait_step = PI
+
+	var suit := StandardMaterial3D.new()
+	suit.albedo_color = Color(0.82, 0.83, 0.86)
+	suit.roughness = 0.65
+	suit.metallic = 0.0
+	suit.emission_enabled = true
+	suit.emission = Color(1.0, 0.4, 0.3)
+	suit.emission_energy_multiplier = 0.0
+	_mats.append(suit)
+
+	var soft := StandardMaterial3D.new()  # fabric joints
+	soft.albedo_color = Color(0.7, 0.71, 0.74)
+	soft.roughness = 0.85
+
+	var dark := StandardMaterial3D.new()
+	dark.albedo_color = Color(0.13, 0.13, 0.16)
+	dark.roughness = 0.6
+	dark.metallic = 0.4
+
+	var orange := StandardMaterial3D.new()
+	orange.albedo_color = Color(0.95, 0.5, 0.12)
+	orange.roughness = 0.5
+
+	# ---- torso: rounded chest tapering to the waist ----
+	var chest := SphereMesh.new()
+	chest.radius = 0.26
+	chest.height = 0.52
+	var ch := _mesh(chest, suit, Vector3(0, 1.28, 0))
+	ch.scale = Vector3(1.0, 0.95, 0.85)
+	var waist := CylinderMesh.new()
+	waist.top_radius = 0.2
+	waist.bottom_radius = 0.22
+	waist.height = 0.3
+	_mesh(waist, soft, Vector3(0, 1.0, 0))
+	# hip block
+	var hips := SphereMesh.new()
+	hips.radius = 0.23
+	hips.height = 0.4
+	var hp := _mesh(hips, suit, Vector3(0, 0.86, 0))
+	hp.scale = Vector3(1.0, 0.7, 0.85)
+
+	# chest control panel + mission stripe
+	var panel := BoxMesh.new()
+	panel.size = Vector3(0.18, 0.13, 0.04)
+	_mesh(panel, dark, Vector3(0, 1.3, 0.22))
+	for k in 3:
+		var btn := SphereMesh.new()
+		btn.radius = 0.02
+		btn.height = 0.04
+		var bmat := orange if k == 0 else soft
+		_mesh(btn, bmat, Vector3(-0.05 + k * 0.05, 1.3, 0.245))
+	# shoulder flag patch (sits flush on the upper arm cap area)
+	var patch := BoxMesh.new()
+	patch.size = Vector3(0.08, 0.1, 0.02)
+	_mesh(patch, orange, Vector3(0.15, 1.36, 0.16))
+
+	# ---- life-support backpack ----
+	var pack := BoxMesh.new()
+	pack.size = Vector3(0.36, 0.5, 0.2)
+	var pk := _mesh(pack, suit, Vector3(0, 1.28, -0.26))
+	pk.scale = Vector3(1, 1, 1)
+	for side in [-1.0, 1.0]:
+		var tank := CylinderMesh.new()
+		tank.top_radius = 0.06
+		tank.bottom_radius = 0.06
+		tank.height = 0.42
+		_mesh(tank, dark, Vector3(0.1 * side, 1.28, -0.34))
+
+	# ---- shoulders ----
+	for side in [-1.0, 1.0]:
+		var sh := SphereMesh.new()
+		sh.radius = 0.11
+		sh.height = 0.22
+		_mesh(sh, suit, Vector3(0.28 * side, 1.42, 0))
+
+	# ---- arms (shoulder pivots) & legs (hip pivots) ----
+	# order: legL, legR, armR, armL so opposite arm/leg swing together
+	var limbs := [
+		{ "at": Vector3(0.12, 0.82, 0), "arm": false },
+		{ "at": Vector3(-0.12, 0.82, 0), "arm": false },
+		{ "at": Vector3(-0.28, 1.42, 0), "arm": true },
+		{ "at": Vector3(0.28, 1.42, 0), "arm": true },
+	]
+	for d in limbs:
+		var pivot := Node3D.new()
+		pivot.position = d.at
+		_vis.add_child(pivot)
+		_leg_pivots.append(pivot)
+		if d.arm:
+			_build_arm(pivot, suit, soft, dark, signf(d.at.x))
+		else:
+			_build_leg(pivot, suit, soft, dark)
+
+	# ---- neck ring + head ----
+	var ring := TorusMesh.new()
+	ring.inner_radius = 0.1
+	ring.outer_radius = 0.15
+	_mesh(ring, orange, Vector3(0, 1.55, 0))
+
+	var head := SphereMesh.new()
+	head.radius = 0.2
+	head.height = 0.4
+	var head_mat := ShaderMaterial.new()
+	head_mat.shader = load("res://shaders/lucas_head.gdshader")
+	head_mat.set_shader_parameter("face_tex", load(LUCAS_TEX))
+	head_mat.set_shader_parameter("skin_color", Color(0.74, 0.57, 0.46))
+	head_mat.set_shader_parameter("face_emission", 0.06)
+	var hd := MeshInstance3D.new()
+	hd.mesh = head
+	hd.material_override = head_mat
+	hd.position = Vector3(0, 1.75, 0)
+	hd.scale = Vector3(0.95, 1.05, 0.98)
+	_vis.add_child(hd)
+
+	# ---- clear helmet dome + rim ----
+	var glass := StandardMaterial3D.new()
+	glass.albedo_color = Color(0.55, 0.75, 0.9, 0.14)
+	glass.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	glass.roughness = 0.03
+	glass.metallic = 0.4
+	var helmet := SphereMesh.new()
+	helmet.radius = 0.28
+	helmet.height = 0.56
+	var hm := MeshInstance3D.new()
+	hm.mesh = helmet
+	hm.material_override = glass
+	hm.position = Vector3(0, 1.76, 0.0)
+	_vis.add_child(hm)
+
+	var rim := TorusMesh.new()
+	rim.inner_radius = 0.26
+	rim.outer_radius = 0.3
+	_mesh(rim, orange, Vector3(0, 1.55, 0))
+
+	# gentle fill so the face isn't pure black from the side; the player's
+	# flashlight does the real lighting when they look at him
+	var face_light := OmniLight3D.new()
+	face_light.position = Vector3(0, 1.78, 0.5)
+	face_light.omni_range = 1.6
+	face_light.light_energy = 0.55
+	face_light.light_color = Color(0.85, 0.9, 1.0)
+	_vis.add_child(face_light)
+
+	# faint red underglow — he is still the monster
+	var glow := OmniLight3D.new()
+	glow.position = Vector3(0, 0.7, 0)
+	glow.omni_range = 4.0
+	glow.light_energy = 0.35
+	glow.light_color = Color(0.9, 0.25, 0.15)
+	_vis.add_child(glow)
+
+
+func _build_arm(pivot: Node3D, suit: Material, soft: Material, dark: Material, side: float) -> void:
+	# arm hangs down and slightly out, elbow bent forward
+	var upper := CapsuleMesh.new()
+	upper.radius = 0.06
+	upper.height = 0.4
+	var u := MeshInstance3D.new()
+	u.mesh = upper
+	u.material_override = suit
+	u.position = Vector3(0.04 * side, -0.18, 0)
+	u.rotation_degrees = Vector3(0, 0, 8.0 * side)
+	pivot.add_child(u)
+	var elbow := _child_sphere(pivot, soft, 0.055, Vector3(0.07 * side, -0.37, 0))
+	var lower := CapsuleMesh.new()
+	lower.radius = 0.05
+	lower.height = 0.36
+	var l := MeshInstance3D.new()
+	l.mesh = lower
+	l.material_override = suit
+	l.position = Vector3(0.09 * side, -0.54, 0.05)
+	l.rotation_degrees = Vector3(18, 0, 6.0 * side)
+	pivot.add_child(l)
+	# glove
+	var glove := SphereMesh.new()
+	glove.radius = 0.06
+	glove.height = 0.12
+	_child_mesh(pivot, glove, dark, Vector3(0.1 * side, -0.72, 0.12))
+
+
+func _build_leg(pivot: Node3D, suit: Material, soft: Material, dark: Material) -> void:
+	var thigh := CapsuleMesh.new()
+	thigh.radius = 0.085
+	thigh.height = 0.44
+	_child_mesh(pivot, thigh, suit, Vector3(0, -0.22, 0))
+	_child_sphere(pivot, soft, 0.075, Vector3(0, -0.44, 0))
+	var shin := CapsuleMesh.new()
+	shin.radius = 0.07
+	shin.height = 0.42
+	_child_mesh(pivot, shin, suit, Vector3(0, -0.66, 0))
+	# boot
+	var boot := BoxMesh.new()
+	boot.size = Vector3(0.13, 0.1, 0.24)
+	_child_mesh(pivot, boot, dark, Vector3(0, -0.9, 0.05))
+
+
+func _child_mesh(parent: Node3D, mesh: Mesh, mat: Material, pos: Vector3) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	mi.mesh = mesh
+	mi.material_override = mat
+	mi.position = pos
+	parent.add_child(mi)
+	return mi
+
+
+func _child_sphere(parent: Node3D, mat: Material, r: float, pos: Vector3) -> MeshInstance3D:
+	var m := SphereMesh.new()
+	m.radius = r
+	m.height = r * 2.0
+	return _child_mesh(parent, m, mat, pos)
 
 
 func _build_body() -> void:
@@ -252,7 +572,8 @@ func _physics_process(delta: float) -> void:
 	_attack_cd -= delta
 	_screech_cd -= delta
 	_flash = maxf(_flash - delta * 4.0, 0.0)
-	_mats[0].emission_energy_multiplier = _flash * 4.0
+	if not _mats.is_empty():
+		_mats[0].emission_energy_multiplier = _flash * 4.0
 
 	var to_player := player.global_position - global_position
 	var dist := to_player.length()
@@ -311,11 +632,19 @@ func _physics_process(delta: float) -> void:
 	# gait + tail sway + breathing bob
 	_gait += delta * (10.0 if _state != "wander" else 5.0)
 	for i in _leg_pivots.size():
-		_leg_pivots[i].rotation.x = sin(_gait + i * PI * 0.5) * 0.4
+		_leg_pivots[i].rotation.x = sin(_gait + i * _gait_step) * 0.4
 	if _tail_pivot:
 		_tail_pivot.rotation.y = sin(_gait * 0.6) * 0.35
 	if _vis:
 		_vis.position.y = sin(_gait * 0.8) * 0.03
+
+	# static GLB hunters can't animate — give them a lumbering shamble
+	if _model_holder:
+		var pace := 1.6 if _state != "wander" else 1.0
+		_model_holder.position.y = absf(sin(_gait * 0.9)) * 0.09 * pace
+		_model_holder.rotation.z = sin(_gait * 0.9) * 0.07 * pace
+		var lean := 0.22 if _state == "attack" else (0.13 if _state == "chase" else 0.04)
+		_model_holder.rotation.x = lerp_angle(_model_holder.rotation.x, lean, delta * 3.0)
 
 
 func take_hit(dmg: int, dir: Vector3) -> void:

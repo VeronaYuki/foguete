@@ -3,11 +3,14 @@ extends Node3D
 
 const START_SPOT := { "pos": Vector2(0, -20), "height": 4.0, "radius": 8.0 }
 const ROCKET_SPOT := { "pos": Vector2(0, 175), "height": 6.0, "radius": 10.0 }
-const ALIEN_COUNT := 6
+const ALIEN_START := 2       # roaming when you arrive
+const ALIEN_MAX_ALIVE := 5   # never more than this at once
+const SPAWN_MIN := 4.0       # seconds between spawn attempts
+const SPAWN_MAX := 8.0
 const PART_DEFS := [
-	{ "name": "FUEL CELL", "pos": Vector2(-26, 55) },
-	{ "name": "NAV MODULE", "pos": Vector2(24, 105) },
-	{ "name": "ENGINE NOZZLE", "pos": Vector2(-14, 150) },
+	{ "name": "CÉLULA DE COMBUSTÍVEL", "pos": Vector2(-26, 55) },
+	{ "name": "MÓDULO DE NAVEGAÇÃO", "pos": Vector2(24, 105) },
+	{ "name": "TUBEIRA DO MOTOR", "pos": Vector2(-14, 150) },
 ]
 
 var terrain: Terrain
@@ -32,6 +35,9 @@ var parts: Array[Dictionary] = []
 var parts_found := 0
 var toast_label: Label
 var _toast_t := 0.0
+var _spawn_rng := RandomNumberGenerator.new()
+var _alien_spawn_t := 5.0
+var _briefing_active := false
 
 
 func _ready() -> void:
@@ -47,15 +53,43 @@ func _ready() -> void:
 	sfx = Sfx.new()
 	add_child(sfx)
 
-	_show_card("VH-9  ·  THE SWAMP",
-		"Your ship is missing 3 parts — recover them (amber beacons), then launch.\nWASD move · SHIFT sprint · SPACE jump · Q dash · LMB fire · E interact")
-	get_tree().create_timer(5.0).timeout.connect(func () -> void:
-		if not _game_over:
-			_fade_card()
-	)
-
 	if OS.get_environment("FOGUETE_PHOTO") == "1":
 		_photo_mode.call_deferred()
+		return
+
+	# Captain Gus radios the mission briefing over the helmet HUD;
+	# freeze movement (the player can still look around) until he's done
+	player.set_physics_process(false)
+	hud.visible = false
+	# hold the hunters until the briefing ends — no dying mid-transmission
+	_briefing_active = true
+	for a in get_tree().get_nodes_in_group("alien"):
+		a.set_physics_process(false)
+	var briefing := CaptainBriefing.new()
+	briefing.setup(sfx)
+	add_child(briefing)
+
+	if OS.get_environment("FOGUETE_PHOTO_GUS") == "1":
+		get_tree().create_timer(1.6).timeout.connect(func () -> void:
+			await RenderingServer.frame_post_draw
+			get_viewport().get_texture().get_image().save_png("/Users/verona/Documents/foguete/.shots/gus.png")
+			get_tree().quit()
+		)
+		return
+	briefing.finished.connect(func () -> void:
+		_briefing_active = false
+		if is_instance_valid(player):
+			player.set_physics_process(true)
+		for a in get_tree().get_nodes_in_group("alien"):
+			a.set_physics_process(true)
+		hud.visible = true
+		_show_card("BOA CAÇADA, RECRUTA",
+			"WASD mover · SHIFT correr · ESPAÇO pular · Q esquiva · LMB atirar · E interagir")
+		get_tree().create_timer(3.5).timeout.connect(func () -> void:
+			if not _game_over:
+				_fade_card()
+		)
+	)
 
 
 func _build_environment() -> void:
@@ -212,15 +246,17 @@ func _build_rocket() -> void:
 	col.shape = cyl
 	root.add_child(col)
 
-	var hull := StandardMaterial3D.new()
-	hull.albedo_color = Color(0.85, 0.86, 0.9)
-	hull.metallic = 0.6
-	hull.roughness = 0.35
-	var accent := StandardMaterial3D.new()
-	accent.albedo_color = Color(0.9, 0.25, 0.15)
+	# tooth rocket — Capim is a dental company, so the ship is a giant molar
+	var enamel := StandardMaterial3D.new()
+	enamel.albedo_color = Color(0.97, 0.97, 0.94)
+	enamel.roughness = 0.2
+	enamel.metallic = 0.0
+	var ivory := StandardMaterial3D.new()
+	ivory.albedo_color = Color(0.9, 0.86, 0.74)
+	ivory.roughness = 0.4
 	var dark := StandardMaterial3D.new()
-	dark.albedo_color = Color(0.15, 0.15, 0.17)
-	dark.metallic = 0.8
+	dark.albedo_color = Color(0.13, 0.13, 0.16)
+	dark.metallic = 0.7
 
 	var warm_glow := StandardMaterial3D.new()
 	warm_glow.albedo_color = Color(0.05, 0.04, 0.02)
@@ -228,113 +264,90 @@ func _build_rocket() -> void:
 	warm_glow.emission = Color(1.0, 0.75, 0.4)
 	warm_glow.emission_energy_multiplier = 2.5
 
-	# main hull with a tapered upper section
-	var body_mesh := CylinderMesh.new()
-	body_mesh.top_radius = 0.5
-	body_mesh.bottom_radius = 0.58
-	body_mesh.height = 2.0
-	var mi := MeshInstance3D.new()
-	mi.mesh = body_mesh
-	mi.material_override = hull
-	mi.position = Vector3(0, -0.2, 0)
-	root.add_child(mi)
+	# crown — bulbous enamel body
+	var crown := SphereMesh.new()
+	crown.radius = 0.82
+	crown.height = 1.5
+	var cr := MeshInstance3D.new()
+	cr.mesh = crown
+	cr.material_override = enamel
+	cr.position = Vector3(0, 0.5, 0)
+	cr.scale = Vector3(1.05, 1.05, 0.95)
+	root.add_child(cr)
 
-	var taper := CylinderMesh.new()
-	taper.top_radius = 0.34
-	taper.bottom_radius = 0.5
-	taper.height = 0.7
-	var tmi := MeshInstance3D.new()
-	tmi.mesh = taper
-	tmi.material_override = hull
-	tmi.position = Vector3(0, 1.15, 0)
-	root.add_child(tmi)
+	# rounded cusps on the biting surface
+	for cx in [-0.34, 0.34]:
+		for cz in [-0.3, 0.3]:
+			var cusp := SphereMesh.new()
+			cusp.radius = 0.32
+			cusp.height = 0.55
+			var cu := MeshInstance3D.new()
+			cu.mesh = cusp
+			cu.material_override = enamel
+			cu.position = Vector3(cx, 1.12, cz)
+			root.add_child(cu)
 
-	var nose := CylinderMesh.new()
-	nose.top_radius = 0.02
-	nose.bottom_radius = 0.34
-	nose.height = 0.9
-	var nmi := MeshInstance3D.new()
-	nmi.mesh = nose
-	nmi.material_override = accent
-	nmi.position = Vector3(0, 1.95, 0)
-	root.add_child(nmi)
+	# neck tapering into the roots
+	var neck := SphereMesh.new()
+	neck.radius = 0.62
+	neck.height = 0.9
+	var nk := MeshInstance3D.new()
+	nk.mesh = neck
+	nk.material_override = enamel
+	nk.position = Vector3(0, -0.35, 0)
+	root.add_child(nk)
 
-	# accent band + glowing portholes + hatch
-	var band := CylinderMesh.new()
-	band.top_radius = 0.6
-	band.bottom_radius = 0.6
-	band.height = 0.14
-	var bmi := MeshInstance3D.new()
-	bmi.mesh = band
-	bmi.material_override = accent
-	bmi.position = Vector3(0, -1.0, 0)
-	root.add_child(bmi)
+	# two tapering roots planted in the swamp (also read as landing legs)
+	for rx in [-0.34, 0.34]:
+		var rootcone := CylinderMesh.new()
+		rootcone.top_radius = 0.4
+		rootcone.bottom_radius = 0.04
+		rootcone.height = 1.6
+		var rc := MeshInstance3D.new()
+		rc.mesh = rootcone
+		rc.material_override = ivory
+		rc.position = Vector3(rx, -1.4, 0)
+		rc.rotation.z = -signf(rx) * 0.16
+		root.add_child(rc)
 
-	for i in 3:
-		var port := SphereMesh.new()
-		port.radius = 0.07
-		port.height = 0.14
-		var pmi := MeshInstance3D.new()
-		pmi.mesh = port
-		pmi.material_override = warm_glow
-		pmi.position = Vector3(0, 0.9 - i * 0.5, -0.52)
-		pmi.scale = Vector3(1, 1, 0.4)
-		root.add_child(pmi)
-
+	# hatch + glowing window on the front (the side the player approaches, -Z)
 	var hatch := BoxMesh.new()
-	hatch.size = Vector3(0.34, 0.5, 0.08)
+	hatch.size = Vector3(0.4, 0.55, 0.1)
 	var hmi := MeshInstance3D.new()
 	hmi.mesh = hatch
 	hmi.material_override = dark
-	hmi.position = Vector3(0, -0.5, -0.56)
+	hmi.position = Vector3(0, 0.05, -0.74)
 	root.add_child(hmi)
+	var win := BoxMesh.new()
+	win.size = Vector3(0.24, 0.14, 0.04)
+	var wmi := MeshInstance3D.new()
+	wmi.mesh = win
+	wmi.material_override = warm_glow
+	wmi.position = Vector3(0, 0.24, -0.8)
+	root.add_child(wmi)
 
-	# engine bell
-	var bell := CylinderMesh.new()
-	bell.top_radius = 0.3
-	bell.bottom_radius = 0.48
-	bell.height = 0.5
-	var bell_mi := MeshInstance3D.new()
-	bell_mi.mesh = bell
-	bell_mi.material_override = dark
-	bell_mi.position = Vector3(0, -1.42, 0)
-	root.add_child(bell_mi)
+	# Capim logo panel on the crown, facing the player
+	var logo_mat := StandardMaterial3D.new()
+	logo_mat.albedo_texture = load("res://assets/capim.png")
+	logo_mat.emission_enabled = true
+	logo_mat.emission_texture = load("res://assets/capim.png")
+	logo_mat.emission_energy_multiplier = 0.35
+	var logo := QuadMesh.new()
+	logo.size = Vector2(0.66, 0.66)
+	var lmi := MeshInstance3D.new()
+	lmi.mesh = logo
+	lmi.material_override = logo_mat
+	lmi.position = Vector3(0, 0.66, -0.79)
+	lmi.rotation_degrees = Vector3(0, 180, 0)
+	root.add_child(lmi)
 
-	# four fins + sturdy legs with feet
-	for i in 4:
-		var ang := TAU * i / 4.0 + TAU / 8.0
-		var out := Vector3(sin(ang), 0, cos(ang))
-
-		var fin := BoxMesh.new()
-		fin.size = Vector3(0.06, 1.1, 0.5)
-		var fmi := MeshInstance3D.new()
-		fmi.mesh = fin
-		fmi.material_override = accent
-		fmi.position = out * 0.72 + Vector3(0, -0.85, 0)
-		fmi.rotation.y = ang
-		fmi.rotation.z = 0.0
-		root.add_child(fmi)
-
-		var leg := CylinderMesh.new()
-		leg.top_radius = 0.07
-		leg.bottom_radius = 0.07
-		leg.height = 1.4
-		var lmi := MeshInstance3D.new()
-		lmi.mesh = leg
-		lmi.material_override = dark
-		lmi.position = out * 0.85 + Vector3(0, -1.15, 0)
-		lmi.rotation = Vector3(cos(ang) * 0.55, 0, -sin(ang) * 0.55)
-		root.add_child(lmi)
-
-		var foot := CylinderMesh.new()
-		foot.top_radius = 0.16
-		foot.bottom_radius = 0.2
-		foot.height = 0.08
-		var ft := MeshInstance3D.new()
-		ft.mesh = foot
-		ft.material_override = dark
-		ft.position = out * 1.22 + Vector3(0, -1.78, 0)
-		root.add_child(ft)
+	# engine glow beneath the roots
+	var eng := OmniLight3D.new()
+	eng.position = Vector3(0, -2.1, 0)
+	eng.omni_range = 6.0
+	eng.light_energy = 2.0
+	eng.light_color = Color(1.0, 0.6, 0.3)
+	root.add_child(eng)
 
 	# beacon column visible across the swamp
 	var beacon := SpotLight3D.new()
@@ -542,17 +555,44 @@ func _build_player() -> void:
 
 
 func _spawn_aliens() -> void:
-	var rng := RandomNumberGenerator.new()
-	rng.seed = 31
-	for i in ALIEN_COUNT:
-		var z := rng.randf_range(20.0, 155.0)
-		var x := rng.randf_range(-24.0, 24.0)
-		var a := Alien.new()
-		add_child(a)
-		a.global_position = Vector3(x, terrain.get_height(x, z) + 1.0, z)
-		a.player = player
-		a.planet = self
-		a.killed.connect(_on_alien_killed)
+	_spawn_rng.seed = 31
+	for i in ALIEN_START:
+		var z := _spawn_rng.randf_range(30.0, 150.0)
+		var x := _spawn_rng.randf_range(-24.0, 24.0)
+		_make_alien(Vector3(x, terrain.get_height(x, z) + 1.0, z))
+
+
+func _make_alien(pos: Vector3) -> void:
+	var a := Alien.new()
+	add_child(a)
+	a.global_position = pos
+	a.player = player
+	a.planet = self
+	a.killed.connect(_on_alien_killed)
+
+
+func _tick_spawns(delta: float) -> void:
+	if _briefing_active:
+		return
+	_alien_spawn_t -= delta
+	if _alien_spawn_t > 0.0:
+		return
+	_alien_spawn_t = _spawn_rng.randf_range(SPAWN_MIN, SPAWN_MAX)
+	if get_tree().get_nodes_in_group("alien").size() >= ALIEN_MAX_ALIVE:
+		return
+	# spawn at a random point on a ring around the player, biased ahead
+	# toward the rocket, and never right on top of them
+	var ang := _spawn_rng.randf_range(-1.4, 1.4)  # mostly in front
+	var dist := _spawn_rng.randf_range(22.0, 34.0)
+	var fwd := (rocket_pos - player.global_position)
+	fwd.y = 0.0
+	fwd = fwd.normalized() if fwd.length() > 0.1 else Vector3.FORWARD
+	var dir := fwd.rotated(Vector3.UP, ang)
+	var p := player.global_position + dir * dist
+	p.x = clampf(p.x, Terrain.X_MIN + 6, Terrain.X_MAX - 6)
+	p.z = clampf(p.z, Terrain.Z_MIN + 6, Terrain.Z_MAX - 6)
+	p.y = terrain.get_height(p.x, p.z) + 1.0
+	_make_alien(p)
 
 
 func _build_hud() -> void:
@@ -575,7 +615,7 @@ func _build_hud() -> void:
 	box.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
 	box.position = Vector2(24, -110)
 	root.add_child(box)
-	box.add_child(_mk_label("HEALTH", 15, Color(0.7, 0.9, 1.0)))
+	box.add_child(_mk_label("VIDA", 15, Color(0.7, 0.9, 1.0)))
 	health_bar = ProgressBar.new()
 	health_bar.min_value = 0
 	health_bar.max_value = 100
@@ -591,7 +631,7 @@ func _build_hud() -> void:
 	health_bar.add_theme_stylebox_override("background", bg)
 	health_bar.add_theme_stylebox_override("fill", fill)
 	box.add_child(health_bar)
-	kills_label = _mk_label("KILLS  0", 15, Color(0.9, 0.9, 0.9))
+	kills_label = _mk_label("ABATES  0", 15, Color(0.9, 0.9, 0.9))
 	box.add_child(kills_label)
 
 	objective = _mk_label("", 22, Color(0.85, 0.95, 1.0))
@@ -666,11 +706,15 @@ func _photo_mode() -> void:
 	await get_tree().process_frame
 	var aliens := get_tree().get_nodes_in_group("alien")
 	var a0: Vector3 = aliens[0].global_position if not aliens.is_empty() else Vector3(0, 5, 60)
+	# freeze the first alien facing +Z so the face close-ups are deterministic
+	if not aliens.is_empty():
+		aliens[0].set_physics_process(false)
+		(aliens[0] as Node3D).rotation.y = 0.0
 
 	var shots := [
-		{ "pos": Vector3(0, terrain.get_height(0, -28) + 4.0, -28), "look": Vector3(0, 10, 60) },
-		{ "pos": Vector3(-14, terrain.get_height(-14, 55) + 5.0, 55), "look": rocket_pos + Vector3(0, 10, 0) },
-		{ "pos": Vector3(6, terrain.get_height(6, 90) + 1.8, 90), "look": Vector3(6, terrain.get_height(6, 110) + 1.0, 110) },
+		{ "pos": a0 + Vector3(0, 1.78, 2.1), "look": a0 + Vector3(0, 1.76, 0) },
+		{ "pos": a0 + Vector3(1.6, 1.6, 2.4), "look": a0 + Vector3(0, 1.4, 0) },
+		{ "pos": a0 + Vector3(2.8, 1.2, 3.0), "look": a0 + Vector3(0, 1.1, 0) },
 		{ "pos": a0 + Vector3(2.6, 1.9, 2.6), "look": a0 + Vector3(0, 1.2, 0) },
 		{ "pos": rocket_pos + Vector3(10, 7, -18), "look": rocket_pos + Vector3(0, 3, 0) },
 		{ "pos": player.global_position + Vector3(-1.2, 1.7, 1.8), "look": player.global_position + Vector3(-0.3, 1.3, 0.5) },
@@ -702,6 +746,8 @@ func _process(_delta: float) -> void:
 	if _game_over or player == null:
 		return
 
+	_tick_spawns(_delta)
+
 	# toast fade
 	if _toast_t > 0.0:
 		_toast_t -= _delta
@@ -720,7 +766,7 @@ func _process(_delta: float) -> void:
 			p.found = true
 			parts_found += 1
 			sfx.play_chime()
-			_toast("%s SECURED  —  %d/%d" % [p.name, parts_found, PART_DEFS.size()])
+			_toast("%s A BORDO  —  %d/%d" % [p.name, parts_found, PART_DEFS.size()])
 			(p.root as Node3D).queue_free()
 
 	var total := PART_DEFS.size()
@@ -730,23 +776,23 @@ func _process(_delta: float) -> void:
 		for p in parts:
 			if not p.found:
 				nearest = minf(nearest, player.global_position.distance_to((p.root as Node3D).global_position))
-		objective.text = "RECOVER SHIP PARTS  %d/%d  —  nearest beacon %0.0f m" % [parts_found, total, nearest]
+		objective.text = "RECUPERE AS PEÇAS  %d/%d  —  baliza %0.0f m" % [parts_found, total, nearest]
 	else:
-		objective.text = "ALL PARTS SECURED  —  ROCKET  %0.0f m" % d
+		objective.text = "PEÇAS COMPLETAS  —  FOGUETE  %0.0f m" % d
 
 	_near_rocket = d < 8.0
 	prompt.visible = _near_rocket
 	if _near_rocket:
 		if parts_found < total:
-			prompt.text = "MISSING  %d  PARTS" % (total - parts_found)
+			prompt.text = "FALTAM  %d  PEÇAS" % (total - parts_found)
 			prompt.add_theme_color_override("font_color", Color(1.0, 0.6, 0.3))
 		else:
-			prompt.text = "[E]  INSTALL PARTS & ENTER"
+			prompt.text = "[E]  INSTALAR PEÇAS E ENTRAR"
 			prompt.add_theme_color_override("font_color", Color(0.4, 1.0, 0.9))
 	if _near_rocket and Input.is_action_just_pressed("interact"):
 		if parts_found < total:
 			sfx.play_hurt()
-			_toast("the ship won't fly without all parts", Color(1.0, 0.5, 0.4))
+			_toast("o foguete não voa sem todas as peças", Color(1.0, 0.5, 0.4))
 		else:
 			_game_over = true
 			Flow.goto_cockpit()
@@ -769,14 +815,14 @@ func _on_player_damaged(hp: float) -> void:
 func _on_player_died() -> void:
 	_game_over = true
 	sfx.set_thrust(0.0)
-	_show_card("YOU DIED", "the swamp keeps your bones\n\nrestarting…")
+	_show_card("VOCÊ MORREU", "o pântano fica com seus ossos\n\nreiniciando…")
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	get_tree().create_timer(2.4).timeout.connect(Flow.restart_phase)
 
 
 func _on_alien_killed(pos: Vector3) -> void:
 	Flow.kills += 1
-	kills_label.text = "KILLS  %d" % Flow.kills
+	kills_label.text = "ABATES  %d" % Flow.kills
 	sfx.play_splat()
 	_burst(pos, Color(0.4, 1.0, 0.3), 80, 9.0)
 

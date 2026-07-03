@@ -7,5 +7,9 @@
 # Empty starter project (superseded — safe to delete)
 foguete/
 
+# loose source images live in assets/ once adopted
+/lucas.png
+/gus.png
+
 # macOS
 .DS_Store
