@@ -31,6 +31,15 @@ func _ready() -> void:
 		set_process(false)
 		return
 	_preview_udp.bind(PREVIEW_PORT, "127.0.0.1")
+	# Give a manually-run tracker (the reliable path on macOS, where a
+	# subprocess can't get a camera-permission prompt) a moment to appear.
+	# Only auto-spawn our own if nothing is already streaming.
+	get_tree().create_timer(1.5).timeout.connect(_maybe_spawn_tracker)
+
+
+func _maybe_spawn_tracker() -> void:
+	if active:
+		return  # a tracker (e.g. run_tracker.command) is already sending
 	_spawn_tracker()
 
 
