@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-FOGUETE is a three-phase sci-fi vertical slice built in Godot 4.7 (GDScript, Forward Plus). It is **100% procedural**: every model, texture, sound effect, and level is generated in code — there are no asset files and none should be added.
+FOGUETE is a three-phase sci-fi vertical slice built in Godot 4.7 (GDScript, Forward Plus). It is **almost 100% procedural**: every model, texture, and level is generated in code. The only asset files are the audio files in `audio/` (background music and the recorded rocket sounds); everything else stays code-generated.
 
 ## Commands
 
@@ -33,7 +33,7 @@ Phase transitions and restarts must go through `Flow` — its `_change()`/`resta
 
 **Bonus mini-game.** `scenes/main.tscn` + `game_manager.gd` is a separate, earlier physics rocket-landing game kept as a bonus. It is not part of the phase flow and is run directly from the editor. The reusable `class_name` classes (`Rocket`, `Terrain`, `LandingPad`, `ChaseCamera`, `HUD`, `Crosshair`) belong to it; `Terrain` and `Sfx` are also used by the phase scripts.
 
-**Audio.** `sfx.gd` (`Sfx`) synthesizes all sounds from waveforms at startup. Each phase instantiates its own `Sfx` node. New sounds are added as `_gen_*()` generator functions there.
+**Audio.** `sfx.gd` (`Sfx`) synthesizes most sounds from waveforms at startup. Each phase instantiates its own `Sfx` node. New sounds are added as `_gen_*()` generator functions there. Exceptions: background music (`audio/*.mp3`) and the four recorded rocket sounds (`audio/rocket_*.wav` — engine loop, boost, crash, ship explosion), which `Sfx._load_wav()` loads with a graceful fallback to the synthesized versions when the files are missing.
 
 **Face control.** Phase 3 supports webcam control: `tools/face_tracker.py` (Python + OpenCV, runs outside Godot) streams head position and smile state as JSON over UDP port 46464 and JPEG preview frames (mirror view + tracking overlay) over UDP 46465; `scripts/face_control.gd` (`FaceControl`) listens, exposes `head`/`smiling`/`active`/`preview_texture` plus a `smile_started` signal, and best-effort auto-launches the tracker (venv expected at `~/.local/share/foguete/venv`; uses `flatpak-spawn --host` when Godot runs in flatpak). `runner_main.gd` steers from `face.head`, triggers a 2 s speed boost on `smile_started`, and shows the preview bottom-right in the HUD. Everything degrades to WASD when no tracker/face is present — never make face control mandatory.
 

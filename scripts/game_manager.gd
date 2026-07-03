@@ -210,7 +210,7 @@ func _on_rocket_crashed(pos: Vector3) -> void:
 		return
 	state = State.CRASHED
 	_spawn_explosion(pos)
-	sfx.play_explosion()
+	sfx.play_ship_explosion()
 	sfx.set_thrust(0.0)
 	cam.add_trauma(1.0)
 	Engine.time_scale = 0.25
