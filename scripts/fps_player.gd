@@ -28,6 +28,8 @@ var _bob := 0.0
 var _dash_cd := 0.0
 var _dash_vel := Vector3.ZERO
 var _sway := Vector2.ZERO
+var fire_interval := FIRE_COOLDOWN
+var hit_damage := 1
 
 
 func _ready() -> void:
@@ -57,6 +59,17 @@ func _ready() -> void:
 
 	_build_gun()
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	apply_upgrades()
+
+
+func apply_upgrades() -> void:
+	# persistent brush upgrade: faster fire and 2 damage per hit
+	if int(Flow.upgrade("brush_power")) > 0 or Flow.upgrade("gold_tooth"):
+		fire_interval = 0.1
+		hit_damage = 2
+	else:
+		fire_interval = FIRE_COOLDOWN
+		hit_damage = 1
 
 
 const BRUSH_GLB := "res://electric-toothbrush/source/SM_ORAL_B_Brush_glb.glb"
@@ -172,7 +185,7 @@ func _physics_process(delta: float) -> void:
 
 
 func _fire() -> void:
-	_cooldown = FIRE_COOLDOWN
+	_cooldown = fire_interval
 	_recoil = 1.0
 	muzzle_light.light_energy = 5.0
 
@@ -189,7 +202,7 @@ func _fire() -> void:
 		var collider: Object = hit.collider
 		if collider is Node and (collider as Node).is_in_group("alien"):
 			hit_alien = true
-			(collider as Node).call("take_hit", 1, (-cam.global_transform.basis.z))
+			(collider as Node).call("take_hit", hit_damage, (-cam.global_transform.basis.z))
 
 	if planet:
 		var muzzle := muzzle_light.global_position

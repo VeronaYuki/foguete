@@ -38,6 +38,14 @@ var _toast_t := 0.0
 var _spawn_rng := RandomNumberGenerator.new()
 var _alien_spawn_t := 5.0
 var _briefing_active := false
+var boss: Alien
+var boss_active := false
+var boss_defeated := false
+var boss_bar: ProgressBar
+var boss_name_label: Label
+var boss_box: VBoxContainer
+var gold_tooth: Node3D
+var gold_found := false
 
 
 func _ready() -> void:
@@ -47,6 +55,7 @@ func _ready() -> void:
 	_decorate()
 	_build_rocket()
 	_build_parts()
+	_build_gold_tooth()
 	_build_player()
 	_spawn_aliens()
 	_build_hud()
@@ -64,6 +73,10 @@ func _ready() -> void:
 			get_viewport().get_texture().get_image().save_png("/Users/verona/Documents/foguete/.shots/gun.png")
 			get_tree().quit()
 		)
+		return
+
+	if OS.get_environment("FOGUETE_PHOTO_BOSS") == "1":
+		_photo_boss.call_deferred()
 		return
 
 	# Captain Gus radios the mission briefing over the helmet HUD;
@@ -518,6 +531,41 @@ func _item_mesh(parent: Node3D, mesh: Mesh, mat: Material, pos: Vector3) -> Mesh
 	return mi
 
 
+func _build_gold_tooth() -> void:
+	# hidden collectible off the beaten path — grants a persistent brush upgrade
+	if Flow.upgrade("gold_tooth"):
+		return  # already found in a previous run
+	var pos := Vector2(-78, 92)
+	var h := terrain.get_height(pos.x, pos.y)
+	gold_tooth = Node3D.new()
+	add_child(gold_tooth)
+	gold_tooth.global_position = Vector3(pos.x, h + 1.4, pos.y)
+
+	var gold := StandardMaterial3D.new()
+	gold.albedo_color = Color(1.0, 0.82, 0.2)
+	gold.metallic = 1.0
+	gold.roughness = 0.2
+	gold.emission_enabled = true
+	gold.emission = Color(1.0, 0.75, 0.15)
+	gold.emission_energy_multiplier = 0.6
+
+	var tooth := (load("res://tooth.glb") as PackedScene).instantiate()
+	var holder := Node3D.new()
+	gold_tooth.add_child(holder)
+	holder.add_child(tooth)
+	var aabb := _scene_aabb(tooth)
+	tooth.position = -Vector3(aabb.position.x + aabb.size.x * 0.5, aabb.position.y + aabb.size.y * 0.5, aabb.position.z + aabb.size.z * 0.5)
+	holder.scale = Vector3.ONE * (1.0 / maxf(aabb.size.y, 0.001))
+	for mi in tooth.find_children("*", "MeshInstance3D", true, false):
+		(mi as MeshInstance3D).material_override = gold
+
+	var glow := OmniLight3D.new()
+	glow.omni_range = 8.0
+	glow.light_energy = 1.6
+	glow.light_color = Color(1.0, 0.8, 0.25)
+	gold_tooth.add_child(glow)
+
+
 func _build_player() -> void:
 	player = FPSPlayer.new()
 	add_child(player)
@@ -631,6 +679,35 @@ func _build_hud() -> void:
 	prompt.visible = false
 	root.add_child(prompt)
 
+	# boss health bar (hidden until O Alfa appears)
+	boss_box = VBoxContainer.new()
+	boss_box.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	boss_box.position = Vector2(-260, 70)
+	boss_box.custom_minimum_size = Vector2(520, 0)
+	boss_box.add_theme_constant_override("separation", 4)
+	boss_box.visible = false
+	root.add_child(boss_box)
+	boss_name_label = _mk_label("☣  O ALFA", 22, Color(1.0, 0.35, 0.3))
+	boss_name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	boss_box.add_child(boss_name_label)
+	boss_bar = ProgressBar.new()
+	boss_bar.min_value = 0
+	boss_bar.max_value = 100
+	boss_bar.value = 100
+	boss_bar.show_percentage = false
+	boss_bar.custom_minimum_size = Vector2(520, 18)
+	var bbg := StyleBoxFlat.new()
+	bbg.bg_color = Color(0.1, 0.0, 0.0, 0.6)
+	bbg.border_color = Color(0.8, 0.2, 0.15)
+	bbg.set_border_width_all(2)
+	bbg.set_corner_radius_all(4)
+	var bfill := StyleBoxFlat.new()
+	bfill.bg_color = Color(0.9, 0.2, 0.15)
+	bfill.set_corner_radius_all(4)
+	boss_bar.add_theme_stylebox_override("background", bbg)
+	boss_bar.add_theme_stylebox_override("fill", bfill)
+	boss_box.add_child(boss_bar)
+
 	card_box = VBoxContainer.new()
 	card_box.set_anchors_preset(Control.PRESET_CENTER)
 	card_box.grow_horizontal = Control.GROW_DIRECTION_BOTH
@@ -743,6 +820,19 @@ func _process(_delta: float) -> void:
 			sfx.play_chime()
 			_toast("%s A BORDO  —  %d/%d" % [p.name, parts_found, PART_DEFS.size()])
 			(p.root as Node3D).queue_free()
+			if parts_found >= PART_DEFS.size() and not boss_active and not boss_defeated:
+				_spawn_boss()
+
+	# hidden gold tooth — persistent brush upgrade
+	if gold_tooth != null and not gold_found:
+		gold_tooth.rotation.y += _delta * 1.6
+		if player.global_position.distance_to(gold_tooth.global_position) < 3.0:
+			gold_found = true
+			Flow.grant_gold_tooth()
+			sfx.play_chime()
+			_toast("DENTE DE OURO! escova turbo desbloqueada", Color(1.0, 0.85, 0.2))
+			_apply_upgrades()
+			gold_tooth.queue_free()
 
 	var total := PART_DEFS.size()
 	var d := player.global_position.distance_to(rocket_pos)
@@ -752,6 +842,8 @@ func _process(_delta: float) -> void:
 			if not p.found:
 				nearest = minf(nearest, player.global_position.distance_to((p.root as Node3D).global_position))
 		objective.text = "RECUPERE AS PEÇAS  %d/%d  —  baliza %0.0f m" % [parts_found, total, nearest]
+	elif boss_active:
+		objective.text = "DERROTE O ALFA"
 	else:
 		objective.text = "PEÇAS COMPLETAS  —  FOGUETE  %0.0f m" % d
 
@@ -761,6 +853,9 @@ func _process(_delta: float) -> void:
 		if parts_found < total:
 			prompt.text = "FALTAM  %d  PEÇAS" % (total - parts_found)
 			prompt.add_theme_color_override("font_color", Color(1.0, 0.6, 0.3))
+		elif boss_active:
+			prompt.text = "DERROTE O ALFA PRIMEIRO"
+			prompt.add_theme_color_override("font_color", Color(1.0, 0.4, 0.3))
 		else:
 			prompt.text = "[E]  INSTALAR PEÇAS E ENTRAR"
 			prompt.add_theme_color_override("font_color", Color(0.4, 1.0, 0.9))
@@ -768,6 +863,9 @@ func _process(_delta: float) -> void:
 		if parts_found < total:
 			sfx.play_hurt()
 			_toast("o foguete não voa sem todas as peças", Color(1.0, 0.5, 0.4))
+		elif boss_active:
+			sfx.play_hurt()
+			_toast("o Alfa bloqueia o caminho — mate-o!", Color(1.0, 0.5, 0.4))
 		else:
 			_game_over = true
 			Flow.goto_cockpit()
@@ -789,10 +887,102 @@ func _on_player_damaged(hp: float) -> void:
 
 func _on_player_died() -> void:
 	_game_over = true
+	Flow.register_death()
 	sfx.set_thrust(0.0)
 	_show_card("VOCÊ MORREU", "o pântano fica com seus ossos\n\nreiniciando…")
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	get_tree().create_timer(2.4).timeout.connect(Flow.restart_phase)
+
+
+func _photo_boss() -> void:
+	card_box.visible = false
+	player.set_physics_process(false)
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	var cam := Camera3D.new()
+	cam.fov = 60.0
+	add_child(cam)
+	cam.current = true
+	parts_found = PART_DEFS.size()
+	_spawn_boss()
+	await get_tree().process_frame
+	boss.set_physics_process(false)
+	boss.rotation.y = 0.0
+	await get_tree().create_timer(0.7).timeout
+	var bp: Vector3 = boss.global_position
+	cam.global_position = bp + Vector3(2.0, 3.2, 8.0)
+	cam.look_at(bp + Vector3(0, 2.0, 0))
+	await get_tree().create_timer(0.4).timeout
+	await RenderingServer.frame_post_draw
+	get_viewport().get_texture().get_image().save_png("/Users/verona/Documents/foguete/.shots/boss.png")
+	get_tree().quit()
+
+
+func _spawn_boss() -> void:
+	boss_active = true
+	sfx.play_screech()
+	cam_shake_toast()
+	# erupts between the player and the rocket
+	var toward := (Vector3(ROCKET_SPOT.pos.x, 0, ROCKET_SPOT.pos.y) - player.global_position)
+	toward.y = 0
+	toward = toward.normalized() if toward.length() > 0.1 else Vector3.FORWARD
+	var bp := player.global_position + toward * 14.0
+	bp.x = clampf(bp.x, Terrain.X_MIN + 6, Terrain.X_MAX - 6)
+	bp.z = clampf(bp.z, Terrain.Z_MIN + 6, Terrain.Z_MAX - 6)
+
+	boss = Alien.new()
+	boss.is_boss = true
+	add_child(boss)
+	boss.global_position = Vector3(bp.x, terrain.get_height(bp.x, bp.z) + 1.0, bp.z)
+	boss.player = player
+	boss.planet = self
+	boss.killed.connect(_on_boss_died)
+	boss.health_changed.connect(_on_boss_health)
+
+	boss_box.visible = true
+	boss_bar.max_value = boss.max_hp
+	boss_bar.value = boss.max_hp
+	_toast("O ALFA DESPERTOU — ele guarda o foguete!", Color(1.0, 0.3, 0.2))
+
+
+func boss_summon(pos: Vector3) -> void:
+	if get_tree().get_nodes_in_group("alien").size() >= ALIEN_MAX_ALIVE + 2:
+		return
+	var ang := _spawn_rng.randf_range(-PI, PI)
+	var off := Vector3(cos(ang), 0, sin(ang)) * 7.0
+	var p := pos + off
+	p.x = clampf(p.x, Terrain.X_MIN + 6, Terrain.X_MAX - 6)
+	p.z = clampf(p.z, Terrain.Z_MIN + 6, Terrain.Z_MAX - 6)
+	p.y = terrain.get_height(p.x, p.z) + 1.0
+	_make_alien(p)
+
+
+func _on_boss_health(cur: int, mx: int) -> void:
+	boss_bar.max_value = mx
+	boss_bar.value = cur
+
+
+func _on_boss_died(pos: Vector3) -> void:
+	boss_active = false
+	boss_defeated = true
+	Flow.kills += 1
+	kills_label.text = "ABATES  %d" % Flow.kills
+	boss_box.visible = false
+	sfx.play_splat()
+	sfx.play_explosion()
+	_burst(pos, Color(0.5, 1.0, 0.3), 220, 16.0)
+	_toast("O ALFA CAIU! Vá para o foguete!", Color(0.4, 1.0, 0.5))
+
+
+func cam_shake_toast() -> void:
+	# brief red screen pulse when the boss appears
+	vignette.color = Color(0.9, 0.1, 0.05, 0.5)
+	var tw := create_tween()
+	tw.tween_property(vignette, "color:a", 0.0, 1.2)
+
+
+func _apply_upgrades() -> void:
+	if is_instance_valid(player):
+		player.apply_upgrades()
 
 
 func _on_alien_killed(pos: Vector3) -> void:

@@ -2,6 +2,7 @@ class_name Alien
 extends CharacterBody3D
 
 signal killed(pos: Vector3)
+signal health_changed(cur: int, mx: int)
 
 const CHASE_RANGE := 36.0
 const ATTACK_RANGE := 2.7
@@ -10,6 +11,9 @@ const SPEED_CHASE := 5.6
 const GRAVITY := 14.0
 
 var hp := 3
+var max_hp := 3
+var is_boss := false
+var _summon_cd := 6.0
 var player: FPSPlayer
 var planet: Node3D
 
@@ -39,12 +43,16 @@ const ENEMY_GLBS := [
 
 func _ready() -> void:
 	add_to_group("alien")
+	if is_boss:
+		add_to_group("boss")
+		hp = 26
+		max_hp = 26
 	_home = global_position
 	_wander_target = global_position
 
 	var col := CollisionShape3D.new()
 	var cap := CapsuleShape3D.new()
-	cap.radius = 0.55
+	cap.radius = 0.9 if is_boss else 0.55
 	cap.height = 1.7
 	col.shape = cap
 	col.position = Vector3(0, 0.95, 0)
@@ -52,8 +60,8 @@ func _ready() -> void:
 
 	var glbs := ENEMY_GLBS.filter(func (p: String) -> bool: return ResourceLoader.exists(p))
 	if not glbs.is_empty():
-		cap.height = 1.9
-		col.position = Vector3(0, 1.0, 0)
+		cap.height = 3.4 if is_boss else 1.9
+		col.position = Vector3(0, (1.7 if is_boss else 1.0), 0)
 		_build_glb_body(glbs[randi() % glbs.size()])
 	elif ResourceLoader.exists(LUCAS_TEX):
 		cap.height = 1.9
@@ -80,9 +88,9 @@ func _build_glb_body(path: String) -> void:
 	# eerie red underglow so the hunter reads as a threat in the dark
 	var glow := OmniLight3D.new()
 	glow.position = Vector3(0, 0.8, 0)
-	glow.omni_range = 4.5
-	glow.light_energy = 0.4
-	glow.light_color = Color(0.9, 0.2, 0.12)
+	glow.omni_range = 9.0 if is_boss else 4.5
+	glow.light_energy = 1.6 if is_boss else 0.4
+	glow.light_color = Color(1.0, 0.15, 0.08) if is_boss else Color(0.9, 0.2, 0.12)
 	_vis.add_child(glow)
 
 	# play a built-in animation if the model ships one
@@ -112,7 +120,8 @@ func _fit_model(model: Node3D) -> void:
 		aabb.position.x + aabb.size.x * 0.5,
 		aabb.position.y,
 		aabb.position.z + aabb.size.z * 0.5)
-	_model_holder.scale = Vector3.ONE * (TARGET_HEIGHT / aabb.size.y)
+	var target: float = 3.9 if is_boss else TARGET_HEIGHT
+	_model_holder.scale = Vector3.ONE * (target / aabb.size.y)
 	# models export facing +Z, which matches the alien's forward — no turn needed
 
 
@@ -599,18 +608,27 @@ func _physics_process(delta: float) -> void:
 				_wander_target = _home + Vector3(randf_range(-25, 25), 0, randf_range(-25, 25))
 			target = _wander_target
 		"chase":
-			speed = SPEED_CHASE
+			speed = SPEED_CHASE + (1.6 if is_boss else 0.0)
 			_zig += delta * 5.0
 			var perp := to_player.cross(Vector3.UP).normalized()
 			target = player.global_position + perp * sin(_zig) * 2.5
 		"attack":
-			speed = SPEED_CHASE
+			speed = SPEED_CHASE + (1.6 if is_boss else 0.0)
 			target = player.global_position
+			var atk_range := 3.2 if is_boss else 2.0
 			if _attack_cd <= 0.0:
-				_attack_cd = 1.3
-				velocity += to_player.normalized() * 7.0 + Vector3.UP * 2.5
-				if dist < 2.0:
-					player.take_damage(18.0)
+				_attack_cd = 1.1 if is_boss else 1.3
+				velocity += to_player.normalized() * (10.0 if is_boss else 7.0) + Vector3.UP * 2.5
+				if dist < atk_range:
+					player.take_damage(28.0 if is_boss else 18.0)
+
+	# the boss periodically calls in reinforcements
+	if is_boss and _state != "wander":
+		_summon_cd -= delta
+		if _summon_cd <= 0.0:
+			_summon_cd = 7.0
+			if planet:
+				planet.call("boss_summon", global_position)
 
 	var dir := target - global_position
 	dir.y = 0.0
@@ -649,7 +667,8 @@ func _physics_process(delta: float) -> void:
 func take_hit(dmg: int, dir: Vector3) -> void:
 	hp -= dmg
 	_flash = 1.0
-	velocity += dir * 5.0
+	velocity += dir * (2.0 if is_boss else 5.0)
+	health_changed.emit(maxi(hp, 0), max_hp)
 	if hp <= 0:
 		killed.emit(global_position + Vector3(0, 1, 0))
 		queue_free()
