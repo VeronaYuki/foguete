@@ -21,6 +21,8 @@ var screech: AudioStreamPlayer
 var splat: AudioStreamPlayer
 var tones: Array[AudioStreamPlayer] = []
 var tick: AudioStreamPlayer
+var voice: AudioStreamPlayer
+var radio: AudioStreamPlayer
 var whoosh: AudioStreamPlayer
 
 
@@ -46,6 +48,8 @@ func _ready() -> void:
 	for f in freqs:
 		tones.append(_mk_player(_gen_tone(f), -8.0, false))
 	tick = _mk_player(_gen_tone(1200.0, 0.06), -14.0, false)
+	voice = _mk_player(_gen_voice_blip(), -13.0, false)
+	radio = _mk_player(_gen_radio_crackle(), -12.0, false)
 	var boost_wav := _load_wav("res://audio/rocket_boost.wav")
 	whoosh = _mk_player(boost_wav if boost_wav != null else _gen_boost(), -4.0, false)
 	thruster.play()
@@ -112,6 +116,15 @@ func play_tone(i: int) -> void:
 
 func play_tick() -> void:
 	tick.play()
+
+
+func play_voice(pitch: float) -> void:
+	voice.pitch_scale = pitch
+	voice.play()
+
+
+func play_radio() -> void:
+	radio.play()
 
 
 func play_boost() -> void:
@@ -273,6 +286,35 @@ func _gen_splat() -> AudioStreamWAV:
 		var t := float(i) / RATE
 		lp += (rng.randf_range(-1.0, 1.0) - lp) * 0.12
 		out[i] = lp * 1.6 * exp(-14.0 * t)
+	return _make_wav(out, false)
+
+
+func _gen_voice_blip() -> AudioStreamWAV:
+	# short buzzy blip per character — reads as radio speech
+	var n := int(RATE * 0.07)
+	var out := PackedFloat32Array()
+	out.resize(n)
+	for i in n:
+		var t := float(i) / RATE
+		var env := minf(t * 30.0, 1.0) * exp(-16.0 * t)
+		# square-ish formant for a vocal buzz
+		var s := signf(sin(TAU * 220.0 * t)) * 0.4 + sin(TAU * 440.0 * t) * 0.3
+		out[i] = s * env * 0.5
+	return _make_wav(out, false)
+
+
+func _gen_radio_crackle() -> AudioStreamWAV:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 2020
+	var n := int(RATE * 0.4)
+	var out := PackedFloat32Array()
+	out.resize(n)
+	var lp := 0.0
+	for i in n:
+		var t := float(i) / RATE
+		var env := exp(-6.0 * t) + 0.3 * exp(-1.5 * t)
+		lp += (rng.randf_range(-1.0, 1.0) - lp) * 0.5
+		out[i] = lp * env * 0.5
 	return _make_wav(out, false)
 
 

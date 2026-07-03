@@ -3,7 +3,15 @@ extends Node3D
 
 const START_SPOT := { "pos": Vector2(0, -20), "height": 4.0, "radius": 8.0 }
 const ROCKET_SPOT := { "pos": Vector2(0, 175), "height": 6.0, "radius": 10.0 }
-const ALIEN_COUNT := 10
+const ALIEN_START := 2       # roaming when you arrive
+const ALIEN_MAX_ALIVE := 5   # never more than this at once
+const SPAWN_MIN := 4.0       # seconds between spawn attempts
+const SPAWN_MAX := 8.0
+const PART_DEFS := [
+	{ "name": "CÉLULA DE COMBUSTÍVEL", "pos": Vector2(-26, 55) },
+	{ "name": "MÓDULO DE NAVEGAÇÃO", "pos": Vector2(24, 105) },
+	{ "name": "TUBEIRA DO MOTOR", "pos": Vector2(-14, 150) },
+]
 
 var terrain: Terrain
 var player: FPSPlayer
@@ -23,6 +31,21 @@ var card_sub: Label
 var _near_rocket := false
 var _game_over := false
 var _spores: GPUParticles3D
+var parts: Array[Dictionary] = []
+var parts_found := 0
+var toast_label: Label
+var _toast_t := 0.0
+var _spawn_rng := RandomNumberGenerator.new()
+var _alien_spawn_t := 5.0
+var _briefing_active := false
+var boss: Alien
+var boss_active := false
+var boss_defeated := false
+var boss_bar: ProgressBar
+var boss_name_label: Label
+var boss_box: VBoxContainer
+var gold_tooth: Node3D
+var gold_found := false
 
 
 func _ready() -> void:
@@ -31,6 +54,8 @@ func _ready() -> void:
 	_build_terrain()
 	_decorate()
 	_build_rocket()
+	_build_parts()
+	_build_gold_tooth()
 	_build_player()
 	_spawn_aliens()
 	_build_hud()
@@ -38,15 +63,56 @@ func _ready() -> void:
 	add_child(sfx)
 	_start_music()
 
-	_show_card("VH-9  ·  THE SWAMP",
-		"Find your rocket.\nWASD move · SHIFT sprint · MOUSE aim · LMB fire · E interact")
-	get_tree().create_timer(5.0).timeout.connect(func () -> void:
-		if not _game_over:
-			_fade_card()
-	)
-
 	if OS.get_environment("FOGUETE_PHOTO") == "1":
 		_photo_mode.call_deferred()
+		return
+
+	# capture the first-person view (to check the gun) from the player camera
+	if OS.get_environment("FOGUETE_PHOTO_GUN") == "1":
+		get_tree().create_timer(1.0).timeout.connect(func () -> void:
+			await RenderingServer.frame_post_draw
+			get_viewport().get_texture().get_image().save_png("/Users/verona/Documents/foguete/.shots/gun.png")
+			get_tree().quit()
+		)
+		return
+
+	if OS.get_environment("FOGUETE_PHOTO_BOSS") == "1":
+		_photo_boss.call_deferred()
+		return
+
+	# Captain Gus radios the mission briefing over the helmet HUD;
+	# freeze movement (the player can still look around) until he's done
+	player.set_physics_process(false)
+	hud.visible = false
+	# hold the hunters until the briefing ends — no dying mid-transmission
+	_briefing_active = true
+	for a in get_tree().get_nodes_in_group("alien"):
+		a.set_physics_process(false)
+	var briefing := CaptainBriefing.new()
+	briefing.setup(sfx)
+	add_child(briefing)
+
+	if OS.get_environment("FOGUETE_PHOTO_GUS") == "1":
+		get_tree().create_timer(1.6).timeout.connect(func () -> void:
+			await RenderingServer.frame_post_draw
+			get_viewport().get_texture().get_image().save_png("/Users/verona/Documents/foguete/.shots/gus.png")
+			get_tree().quit()
+		)
+		return
+	briefing.finished.connect(func () -> void:
+		_briefing_active = false
+		if is_instance_valid(player):
+			player.set_physics_process(true)
+		for a in get_tree().get_nodes_in_group("alien"):
+			a.set_physics_process(true)
+		hud.visible = true
+		_show_card("BOA CAÇADA, RECRUTA",
+			"WASD mover · SHIFT correr · ESPAÇO pular · Q esquiva · LMB atirar · E interagir")
+		get_tree().create_timer(3.5).timeout.connect(func () -> void:
+			if not _game_over:
+				_fade_card()
+		)
+	)
 
 
 func _start_music() -> void:
@@ -126,18 +192,7 @@ func _decorate() -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 77
 
-	# dark rock formations — break up the terrain and give the player cover
-	var rock_mesh := SphereMesh.new()
-	rock_mesh.radius = 1.0
-	rock_mesh.height = 2.0
-	var rock_mat := StandardMaterial3D.new()
-	rock_mat.albedo_color = Color(0.07, 0.09, 0.1)
-	rock_mat.roughness = 0.85
-	rock_mesh.material = rock_mat
-	var rock_scale := func (r: RandomNumberGenerator) -> Vector3:
-		var s: float = r.randf_range(1.5, 5.0)
-		return Vector3(s * r.randf_range(0.8, 1.3), s * 0.7, s * r.randf_range(0.8, 1.3))
-	_scatter(rng, rock_mesh, 70, 0.6, rock_scale, -0.4)
+	_scatter_rocks(rng)
 
 	# drifting spores around the player
 	var spores := GPUParticles3D.new()
@@ -173,28 +228,87 @@ func _decorate() -> void:
 	_spores = spores
 
 
-func _scatter(rng: RandomNumberGenerator, mesh: Mesh, count: int, min_ny: float,
-		scale_fn: Callable, y_off: float) -> void:
-	var transforms: Array[Transform3D] = []
-	for i in count * 4:
-		if transforms.size() >= count:
+func _scatter_rocks(rng: RandomNumberGenerator) -> void:
+	# solid rock formations with collision, kept clear of the parts, the
+	# rocket, the start, and the corridor the player walks to reach them
+	var rock_mat := StandardMaterial3D.new()
+	rock_mat.albedo_color = Color(0.07, 0.09, 0.1)
+	rock_mat.roughness = 0.85
+
+	var clear_spots: Array = [
+		{ "p": START_SPOT.pos, "r": 12.0 },
+		{ "p": ROCKET_SPOT.pos, "r": 16.0 },
+	]
+	for d in PART_DEFS:
+		clear_spots.append({ "p": d.pos, "r": 10.0 })
+	var path := [Vector2(0, -20), Vector2(-15, 60), Vector2(10, 120), Vector2(0, 175)]
+
+	var placed := 0
+	for i in 500:
+		if placed >= 55:
 			break
 		var x := rng.randf_range(Terrain.X_MIN + 10, Terrain.X_MAX - 10)
 		var z := rng.randf_range(Terrain.Z_MIN + 10, Terrain.Z_MAX - 10)
-		if terrain.get_normal(x, z).y < min_ny:
+		var p := Vector2(x, z)
+		if terrain.get_normal(x, z).y < 0.6:
 			continue
-		var s: Vector3 = scale_fn.call(rng)
-		var b := Basis(Vector3.UP, rng.randf() * TAU).scaled(s)
-		transforms.append(Transform3D(b, Vector3(x, terrain.get_height(x, z) + y_off, z)))
-	var mm := MultiMesh.new()
-	mm.transform_format = MultiMesh.TRANSFORM_3D
-	mm.mesh = mesh
-	mm.instance_count = transforms.size()
-	for i in transforms.size():
-		mm.set_instance_transform(i, transforms[i])
-	var mmi := MultiMeshInstance3D.new()
-	mmi.multimesh = mm
-	add_child(mmi)
+		var blocked := false
+		for s in clear_spots:
+			if p.distance_to(s.p) < s.r:
+				blocked = true
+				break
+		if blocked or _dist_to_path(p, path) < 9.0:
+			continue
+
+		var scl := rng.randf_range(1.6, 4.5)
+		var body := StaticBody3D.new()
+		add_child(body)
+		body.global_position = Vector3(x, terrain.get_height(x, z) - 0.4, z)
+		body.rotation.y = rng.randf() * TAU
+		var mesh := SphereMesh.new()
+		mesh.radius = 1.0
+		mesh.height = 2.0
+		var mi := MeshInstance3D.new()
+		mi.mesh = mesh
+		mi.material_override = rock_mat
+		mi.scale = Vector3(scl * rng.randf_range(0.8, 1.3), scl * 0.7, scl * rng.randf_range(0.8, 1.3))
+		body.add_child(mi)
+		var col := CollisionShape3D.new()
+		var shape := SphereShape3D.new()
+		shape.radius = scl * 0.85
+		col.shape = shape
+		body.add_child(col)
+		placed += 1
+
+
+func _scene_aabb(node: Node3D) -> AABB:
+	# merged AABB in node's local space, without needing to be in the tree
+	var merged := AABB()
+	var started := false
+	var stack: Array = [[node, Transform3D.IDENTITY]]
+	while not stack.is_empty():
+		var item: Array = stack.pop_back()
+		var n: Node = item[0]
+		var xf: Transform3D = item[1]
+		if n is VisualInstance3D:
+			var a: AABB = xf * (n as VisualInstance3D).get_aabb()
+			merged = a if not started else merged.merge(a)
+			started = true
+		for c in n.get_children():
+			if c is Node3D:
+				stack.append([c, xf * (c as Node3D).transform])
+	return merged
+
+
+func _dist_to_path(p: Vector2, path: Array) -> float:
+	var best := 1e9
+	for i in path.size() - 1:
+		var a: Vector2 = path[i]
+		var b: Vector2 = path[i + 1]
+		var ab := b - a
+		var t := clampf((p - a).dot(ab) / maxf(ab.length_squared(), 0.001), 0.0, 1.0)
+		best = minf(best, p.distance_to(a + ab * t))
+	return best
 
 
 func _build_rocket() -> void:
@@ -213,129 +327,26 @@ func _build_rocket() -> void:
 	col.shape = cyl
 	root.add_child(col)
 
-	var hull := StandardMaterial3D.new()
-	hull.albedo_color = Color(0.85, 0.86, 0.9)
-	hull.metallic = 0.6
-	hull.roughness = 0.35
-	var accent := StandardMaterial3D.new()
-	accent.albedo_color = Color(0.9, 0.25, 0.15)
-	var dark := StandardMaterial3D.new()
-	dark.albedo_color = Color(0.15, 0.15, 0.17)
-	dark.metallic = 0.8
+	# imported tooth model — the ship is a giant molar (Capim = dental co.)
+	var tooth := (load("res://tooth.glb") as PackedScene).instantiate()
+	var holder := Node3D.new()
+	root.add_child(holder)
+	holder.add_child(tooth)
+	var taabb := _scene_aabb(tooth)
+	var ts := 3.8 / maxf(taabb.size.y, 0.001)
+	tooth.position = -Vector3(
+		taabb.position.x + taabb.size.x * 0.5,
+		taabb.position.y,
+		taabb.position.z + taabb.size.z * 0.5)
+	holder.scale = Vector3.ONE * ts
 
-	var warm_glow := StandardMaterial3D.new()
-	warm_glow.albedo_color = Color(0.05, 0.04, 0.02)
-	warm_glow.emission_enabled = true
-	warm_glow.emission = Color(1.0, 0.75, 0.4)
-	warm_glow.emission_energy_multiplier = 2.5
-
-	# main hull with a tapered upper section
-	var body_mesh := CylinderMesh.new()
-	body_mesh.top_radius = 0.5
-	body_mesh.bottom_radius = 0.58
-	body_mesh.height = 2.0
-	var mi := MeshInstance3D.new()
-	mi.mesh = body_mesh
-	mi.material_override = hull
-	mi.position = Vector3(0, -0.2, 0)
-	root.add_child(mi)
-
-	var taper := CylinderMesh.new()
-	taper.top_radius = 0.34
-	taper.bottom_radius = 0.5
-	taper.height = 0.7
-	var tmi := MeshInstance3D.new()
-	tmi.mesh = taper
-	tmi.material_override = hull
-	tmi.position = Vector3(0, 1.15, 0)
-	root.add_child(tmi)
-
-	var nose := CylinderMesh.new()
-	nose.top_radius = 0.02
-	nose.bottom_radius = 0.34
-	nose.height = 0.9
-	var nmi := MeshInstance3D.new()
-	nmi.mesh = nose
-	nmi.material_override = accent
-	nmi.position = Vector3(0, 1.95, 0)
-	root.add_child(nmi)
-
-	# accent band + glowing portholes + hatch
-	var band := CylinderMesh.new()
-	band.top_radius = 0.6
-	band.bottom_radius = 0.6
-	band.height = 0.14
-	var bmi := MeshInstance3D.new()
-	bmi.mesh = band
-	bmi.material_override = accent
-	bmi.position = Vector3(0, -1.0, 0)
-	root.add_child(bmi)
-
-	for i in 3:
-		var port := SphereMesh.new()
-		port.radius = 0.07
-		port.height = 0.14
-		var pmi := MeshInstance3D.new()
-		pmi.mesh = port
-		pmi.material_override = warm_glow
-		pmi.position = Vector3(0, 0.9 - i * 0.5, -0.52)
-		pmi.scale = Vector3(1, 1, 0.4)
-		root.add_child(pmi)
-
-	var hatch := BoxMesh.new()
-	hatch.size = Vector3(0.34, 0.5, 0.08)
-	var hmi := MeshInstance3D.new()
-	hmi.mesh = hatch
-	hmi.material_override = dark
-	hmi.position = Vector3(0, -0.5, -0.56)
-	root.add_child(hmi)
-
-	# engine bell
-	var bell := CylinderMesh.new()
-	bell.top_radius = 0.3
-	bell.bottom_radius = 0.48
-	bell.height = 0.5
-	var bell_mi := MeshInstance3D.new()
-	bell_mi.mesh = bell
-	bell_mi.material_override = dark
-	bell_mi.position = Vector3(0, -1.42, 0)
-	root.add_child(bell_mi)
-
-	# four fins + sturdy legs with feet
-	for i in 4:
-		var ang := TAU * i / 4.0 + TAU / 8.0
-		var out := Vector3(sin(ang), 0, cos(ang))
-
-		var fin := BoxMesh.new()
-		fin.size = Vector3(0.06, 1.1, 0.5)
-		var fmi := MeshInstance3D.new()
-		fmi.mesh = fin
-		fmi.material_override = accent
-		fmi.position = out * 0.72 + Vector3(0, -0.85, 0)
-		fmi.rotation.y = ang
-		fmi.rotation.z = 0.0
-		root.add_child(fmi)
-
-		var leg := CylinderMesh.new()
-		leg.top_radius = 0.07
-		leg.bottom_radius = 0.07
-		leg.height = 1.4
-		var lmi := MeshInstance3D.new()
-		lmi.mesh = leg
-		lmi.material_override = dark
-		lmi.position = out * 0.85 + Vector3(0, -1.15, 0)
-		lmi.rotation = Vector3(cos(ang) * 0.55, 0, -sin(ang) * 0.55)
-		root.add_child(lmi)
-
-		var foot := CylinderMesh.new()
-		foot.top_radius = 0.16
-		foot.bottom_radius = 0.2
-		foot.height = 0.08
-		var ft := MeshInstance3D.new()
-		ft.mesh = foot
-		ft.material_override = dark
-		ft.position = out * 1.22 + Vector3(0, -1.78, 0)
-		root.add_child(ft)
+	# engine glow beneath the roots
+	var eng := OmniLight3D.new()
+	eng.position = Vector3(0, -2.1, 0)
+	eng.omni_range = 6.0
+	eng.light_energy = 2.0
+	eng.light_color = Color(1.0, 0.6, 0.3)
+	root.add_child(eng)
 
 	# beacon column visible across the swamp
 	var beacon := SpotLight3D.new()
@@ -389,6 +400,183 @@ func _build_rocket() -> void:
 	root.add_child(glow)
 
 
+func _build_parts() -> void:
+	var pedestal_mat := StandardMaterial3D.new()
+	pedestal_mat.albedo_color = Color(0.1, 0.11, 0.13)
+	pedestal_mat.metallic = 0.7
+	pedestal_mat.roughness = 0.4
+
+	for i in PART_DEFS.size():
+		var def: Dictionary = PART_DEFS[i]
+		var root := Node3D.new()
+		add_child(root)
+		var h := terrain.get_height(def.pos.x, def.pos.y)
+		root.global_position = Vector3(def.pos.x, h, def.pos.y)
+
+		var pedestal := BoxMesh.new()
+		pedestal.size = Vector3(0.8, 0.25, 0.8)
+		var pd := MeshInstance3D.new()
+		pd.mesh = pedestal
+		pd.material_override = pedestal_mat
+		pd.position = Vector3(0, 0.12, 0)
+		root.add_child(pd)
+
+		var item := Node3D.new()
+		item.position = Vector3(0, 1.1, 0)
+		root.add_child(item)
+		_build_part_item(item, i)
+
+		# amber beacon column
+		var beacon := SpotLight3D.new()
+		beacon.position = Vector3(0, 0.4, 0)
+		beacon.rotation_degrees = Vector3(90, 0, 0)
+		beacon.spot_range = 70.0
+		beacon.spot_angle = 5.0
+		beacon.light_energy = 14.0
+		beacon.light_color = Color(1.0, 0.72, 0.25)
+		beacon.light_volumetric_fog_energy = 8.0
+		beacon.shadow_enabled = false
+		root.add_child(beacon)
+
+		var glow := OmniLight3D.new()
+		glow.position = Vector3(0, 1.2, 0)
+		glow.omni_range = 9.0
+		glow.light_energy = 1.4
+		glow.light_color = Color(1.0, 0.72, 0.25)
+		root.add_child(glow)
+
+		var shaft_mesh := CylinderMesh.new()
+		shaft_mesh.top_radius = 0.5
+		shaft_mesh.bottom_radius = 0.2
+		shaft_mesh.height = 26.0
+		var shaft_mat := StandardMaterial3D.new()
+		shaft_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		shaft_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		shaft_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+		shaft_mat.albedo_color = Color(1.0, 0.72, 0.25, 0.09)
+		shaft_mesh.material = shaft_mat
+		var shaft := MeshInstance3D.new()
+		shaft.mesh = shaft_mesh
+		shaft.position = Vector3(0, 13.5, 0)
+		root.add_child(shaft)
+
+		parts.append({ "root": root, "item": item, "name": def.name, "found": false, "idx": i })
+
+
+func _build_part_item(item: Node3D, idx: int) -> void:
+	var metal := StandardMaterial3D.new()
+	metal.albedo_color = Color(0.7, 0.72, 0.78)
+	metal.metallic = 0.8
+	metal.roughness = 0.3
+	var dark := StandardMaterial3D.new()
+	dark.albedo_color = Color(0.16, 0.16, 0.18)
+	dark.metallic = 0.7
+	dark.roughness = 0.4
+
+	match idx:
+		0:  # fuel cell — canister with glowing green band
+			var can := CylinderMesh.new()
+			can.top_radius = 0.22
+			can.bottom_radius = 0.22
+			can.height = 0.55
+			_item_mesh(item, can, metal, Vector3.ZERO)
+			var band := CylinderMesh.new()
+			band.top_radius = 0.23
+			band.bottom_radius = 0.23
+			band.height = 0.13
+			var glow := StandardMaterial3D.new()
+			glow.albedo_color = Color(0.02, 0.05, 0.02)
+			glow.emission_enabled = true
+			glow.emission = Color(0.3, 1.0, 0.4)
+			glow.emission_energy_multiplier = 2.5
+			band.material = glow
+			var b := MeshInstance3D.new()
+			b.mesh = band
+			item.add_child(b)
+		1:  # nav module — gyroscope sphere with ring
+			var core := SphereMesh.new()
+			core.radius = 0.18
+			core.height = 0.36
+			var cg := StandardMaterial3D.new()
+			cg.albedo_color = Color(0.02, 0.04, 0.06)
+			cg.emission_enabled = true
+			cg.emission = Color(0.3, 0.9, 1.0)
+			cg.emission_energy_multiplier = 2.2
+			core.material = cg
+			var c := MeshInstance3D.new()
+			c.mesh = core
+			item.add_child(c)
+			var ring := TorusMesh.new()
+			ring.inner_radius = 0.26
+			ring.outer_radius = 0.31
+			var r := _item_mesh(item, ring, metal, Vector3.ZERO)
+			r.rotation_degrees = Vector3(35, 0, 20)
+		2:  # engine nozzle — bell with hot core
+			var bell := CylinderMesh.new()
+			bell.top_radius = 0.13
+			bell.bottom_radius = 0.3
+			bell.height = 0.42
+			_item_mesh(item, bell, dark, Vector3.ZERO)
+			var hot := SphereMesh.new()
+			hot.radius = 0.12
+			hot.height = 0.24
+			var hg := StandardMaterial3D.new()
+			hg.albedo_color = Color(0.06, 0.02, 0.0)
+			hg.emission_enabled = true
+			hg.emission = Color(1.0, 0.5, 0.15)
+			hg.emission_energy_multiplier = 2.5
+			hot.material = hg
+			var hm := MeshInstance3D.new()
+			hm.mesh = hot
+			hm.position = Vector3(0, -0.12, 0)
+			hm.scale = Vector3(1, 0.5, 1)
+			item.add_child(hm)
+
+
+func _item_mesh(parent: Node3D, mesh: Mesh, mat: Material, pos: Vector3) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	mi.mesh = mesh
+	mi.material_override = mat
+	mi.position = pos
+	parent.add_child(mi)
+	return mi
+
+
+func _build_gold_tooth() -> void:
+	# hidden collectible off the beaten path — grants a persistent brush upgrade
+	if Flow.upgrade("gold_tooth"):
+		return  # already found in a previous run
+	var pos := Vector2(-78, 92)
+	var h := terrain.get_height(pos.x, pos.y)
+	gold_tooth = Node3D.new()
+	add_child(gold_tooth)
+	gold_tooth.global_position = Vector3(pos.x, h + 1.4, pos.y)
+
+	var gold := StandardMaterial3D.new()
+	gold.albedo_color = Color(1.0, 0.82, 0.2)
+	gold.metallic = 1.0
+	gold.roughness = 0.2
+	gold.emission_enabled = true
+	gold.emission = Color(1.0, 0.75, 0.15)
+	gold.emission_energy_multiplier = 0.6
+
+	var tooth := (load("res://tooth.glb") as PackedScene).instantiate()
+	var holder := Node3D.new()
+	gold_tooth.add_child(holder)
+	holder.add_child(tooth)
+	var aabb := _scene_aabb(tooth)
+	tooth.position = -Vector3(aabb.position.x + aabb.size.x * 0.5, aabb.position.y + aabb.size.y * 0.5, aabb.position.z + aabb.size.z * 0.5)
+	holder.scale = Vector3.ONE * (1.0 / maxf(aabb.size.y, 0.001))
+	for mi in tooth.find_children("*", "MeshInstance3D", true, false):
+		(mi as MeshInstance3D).material_override = gold
+
+	var glow := OmniLight3D.new()
+	glow.omni_range = 8.0
+	glow.light_energy = 1.6
+	glow.light_color = Color(1.0, 0.8, 0.25)
+	gold_tooth.add_child(glow)
+
+
 func _build_player() -> void:
 	player = FPSPlayer.new()
 	add_child(player)
@@ -401,17 +589,44 @@ func _build_player() -> void:
 
 
 func _spawn_aliens() -> void:
-	var rng := RandomNumberGenerator.new()
-	rng.seed = 31
-	for i in ALIEN_COUNT:
-		var z := rng.randf_range(20.0, 155.0)
-		var x := rng.randf_range(-24.0, 24.0)
-		var a := Alien.new()
-		add_child(a)
-		a.global_position = Vector3(x, terrain.get_height(x, z) + 1.0, z)
-		a.player = player
-		a.planet = self
-		a.killed.connect(_on_alien_killed)
+	_spawn_rng.seed = 31
+	for i in ALIEN_START:
+		var z := _spawn_rng.randf_range(30.0, 150.0)
+		var x := _spawn_rng.randf_range(-24.0, 24.0)
+		_make_alien(Vector3(x, terrain.get_height(x, z) + 1.0, z))
+
+
+func _make_alien(pos: Vector3) -> void:
+	var a := Alien.new()
+	add_child(a)
+	a.global_position = pos
+	a.player = player
+	a.planet = self
+	a.killed.connect(_on_alien_killed)
+
+
+func _tick_spawns(delta: float) -> void:
+	if _briefing_active:
+		return
+	_alien_spawn_t -= delta
+	if _alien_spawn_t > 0.0:
+		return
+	_alien_spawn_t = _spawn_rng.randf_range(SPAWN_MIN, SPAWN_MAX)
+	if get_tree().get_nodes_in_group("alien").size() >= ALIEN_MAX_ALIVE:
+		return
+	# spawn at a random point on a ring around the player, biased ahead
+	# toward the rocket, and never right on top of them
+	var ang := _spawn_rng.randf_range(-1.4, 1.4)  # mostly in front
+	var dist := _spawn_rng.randf_range(22.0, 34.0)
+	var fwd := (rocket_pos - player.global_position)
+	fwd.y = 0.0
+	fwd = fwd.normalized() if fwd.length() > 0.1 else Vector3.FORWARD
+	var dir := fwd.rotated(Vector3.UP, ang)
+	var p := player.global_position + dir * dist
+	p.x = clampf(p.x, Terrain.X_MIN + 6, Terrain.X_MAX - 6)
+	p.z = clampf(p.z, Terrain.Z_MIN + 6, Terrain.Z_MAX - 6)
+	p.y = terrain.get_height(p.x, p.z) + 1.0
+	_make_alien(p)
 
 
 func _build_hud() -> void:
@@ -434,7 +649,7 @@ func _build_hud() -> void:
 	box.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
 	box.position = Vector2(24, -110)
 	root.add_child(box)
-	box.add_child(_mk_label("HEALTH", 15, Color(0.7, 0.9, 1.0)))
+	box.add_child(_mk_label("VIDA", 15, Color(0.7, 0.9, 1.0)))
 	health_bar = ProgressBar.new()
 	health_bar.min_value = 0
 	health_bar.max_value = 100
@@ -450,7 +665,7 @@ func _build_hud() -> void:
 	health_bar.add_theme_stylebox_override("background", bg)
 	health_bar.add_theme_stylebox_override("fill", fill)
 	box.add_child(health_bar)
-	kills_label = _mk_label("KILLS  0", 15, Color(0.9, 0.9, 0.9))
+	kills_label = _mk_label("ABATES  0", 15, Color(0.9, 0.9, 0.9))
 	box.add_child(kills_label)
 
 	objective = _mk_label("", 22, Color(0.85, 0.95, 1.0))
@@ -460,6 +675,13 @@ func _build_hud() -> void:
 	objective.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	root.add_child(objective)
 
+	toast_label = _mk_label("", 22, Color(1.0, 0.85, 0.4))
+	toast_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	toast_label.position = Vector2(0, 66)
+	toast_label.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	toast_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	root.add_child(toast_label)
+
 	prompt = _mk_label("[E]  ENTER ROCKET", 30, Color(0.4, 1.0, 0.9))
 	prompt.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
 	prompt.position = Vector2(0, -160)
@@ -467,6 +689,35 @@ func _build_hud() -> void:
 	prompt.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	prompt.visible = false
 	root.add_child(prompt)
+
+	# boss health bar (hidden until O Alfa appears)
+	boss_box = VBoxContainer.new()
+	boss_box.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	boss_box.position = Vector2(-260, 70)
+	boss_box.custom_minimum_size = Vector2(520, 0)
+	boss_box.add_theme_constant_override("separation", 4)
+	boss_box.visible = false
+	root.add_child(boss_box)
+	boss_name_label = _mk_label("☣  O ALFA", 22, Color(1.0, 0.35, 0.3))
+	boss_name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	boss_box.add_child(boss_name_label)
+	boss_bar = ProgressBar.new()
+	boss_bar.min_value = 0
+	boss_bar.max_value = 100
+	boss_bar.value = 100
+	boss_bar.show_percentage = false
+	boss_bar.custom_minimum_size = Vector2(520, 18)
+	var bbg := StyleBoxFlat.new()
+	bbg.bg_color = Color(0.1, 0.0, 0.0, 0.6)
+	bbg.border_color = Color(0.8, 0.2, 0.15)
+	bbg.set_border_width_all(2)
+	bbg.set_corner_radius_all(4)
+	var bfill := StyleBoxFlat.new()
+	bfill.bg_color = Color(0.9, 0.2, 0.15)
+	bfill.set_corner_radius_all(4)
+	boss_bar.add_theme_stylebox_override("background", bbg)
+	boss_bar.add_theme_stylebox_override("fill", bfill)
+	boss_box.add_child(boss_bar)
 
 	card_box = VBoxContainer.new()
 	card_box.set_anchors_preset(Control.PRESET_CENTER)
@@ -518,14 +769,19 @@ func _photo_mode() -> void:
 	await get_tree().process_frame
 	var aliens := get_tree().get_nodes_in_group("alien")
 	var a0: Vector3 = aliens[0].global_position if not aliens.is_empty() else Vector3(0, 5, 60)
+	# freeze the first alien facing +Z so the face close-ups are deterministic
+	if not aliens.is_empty():
+		aliens[0].set_physics_process(false)
+		(aliens[0] as Node3D).rotation.y = 0.0
 
 	var shots := [
-		{ "pos": Vector3(0, terrain.get_height(0, -28) + 4.0, -28), "look": Vector3(0, 10, 60) },
-		{ "pos": Vector3(-14, terrain.get_height(-14, 55) + 5.0, 55), "look": rocket_pos + Vector3(0, 10, 0) },
-		{ "pos": Vector3(6, terrain.get_height(6, 90) + 1.8, 90), "look": Vector3(6, terrain.get_height(6, 110) + 1.0, 110) },
+		{ "pos": a0 + Vector3(0, 1.78, 2.1), "look": a0 + Vector3(0, 1.76, 0) },
+		{ "pos": a0 + Vector3(1.6, 1.6, 2.4), "look": a0 + Vector3(0, 1.4, 0) },
+		{ "pos": a0 + Vector3(2.8, 1.2, 3.0), "look": a0 + Vector3(0, 1.1, 0) },
 		{ "pos": a0 + Vector3(2.6, 1.9, 2.6), "look": a0 + Vector3(0, 1.2, 0) },
 		{ "pos": rocket_pos + Vector3(10, 7, -18), "look": rocket_pos + Vector3(0, 3, 0) },
 		{ "pos": player.global_position + Vector3(-1.2, 1.7, 1.8), "look": player.global_position + Vector3(-0.3, 1.3, 0.5) },
+		{ "pos": (parts[0].root as Node3D).global_position + Vector3(2.4, 2.0, 2.4), "look": (parts[0].root as Node3D).global_position + Vector3(0, 1.1, 0) },
 	]
 	for i in shots.size():
 		cam.global_position = shots[i].pos
@@ -537,6 +793,13 @@ func _photo_mode() -> void:
 	get_tree().quit()
 
 
+func _toast(text: String, color := Color(1.0, 0.85, 0.4)) -> void:
+	toast_label.text = text
+	toast_label.add_theme_color_override("font_color", color)
+	toast_label.modulate.a = 1.0
+	_toast_t = 3.0
+
+
 func _process(_delta: float) -> void:
 	if Input.is_action_just_pressed("quit"):
 		get_tree().quit()
@@ -546,13 +809,77 @@ func _process(_delta: float) -> void:
 	if _game_over or player == null:
 		return
 
+	_tick_spawns(_delta)
+
+	# toast fade
+	if _toast_t > 0.0:
+		_toast_t -= _delta
+		if _toast_t <= 0.8:
+			toast_label.modulate.a = maxf(_toast_t / 0.8, 0.0)
+
+	# floating part items + pickup
+	var t := Time.get_ticks_msec() / 1000.0
+	for p in parts:
+		if p.found:
+			continue
+		var item: Node3D = p.item
+		item.position.y = 1.1 + sin(t * 2.0 + p.idx * 2.1) * 0.12
+		item.rotation.y += _delta * 1.2
+		if player.global_position.distance_to((p.root as Node3D).global_position) < 3.0:
+			p.found = true
+			parts_found += 1
+			sfx.play_chime()
+			_toast("%s A BORDO  —  %d/%d" % [p.name, parts_found, PART_DEFS.size()])
+			(p.root as Node3D).queue_free()
+			if parts_found >= PART_DEFS.size() and not boss_active and not boss_defeated:
+				_spawn_boss()
+
+	# hidden gold tooth — persistent brush upgrade
+	if gold_tooth != null and not gold_found:
+		gold_tooth.rotation.y += _delta * 1.6
+		if player.global_position.distance_to(gold_tooth.global_position) < 3.0:
+			gold_found = true
+			Flow.grant_gold_tooth()
+			sfx.play_chime()
+			_toast("DENTE DE OURO! escova turbo desbloqueada", Color(1.0, 0.85, 0.2))
+			_apply_upgrades()
+			gold_tooth.queue_free()
+
+	var total := PART_DEFS.size()
 	var d := player.global_position.distance_to(rocket_pos)
-	objective.text = "FIND THE ROCKET  —  %0.0f m" % d
-	_near_rocket = d < 7.0
+	if parts_found < total:
+		var nearest := 1e9
+		for p in parts:
+			if not p.found:
+				nearest = minf(nearest, player.global_position.distance_to((p.root as Node3D).global_position))
+		objective.text = "RECUPERE AS PEÇAS  %d/%d  —  baliza %0.0f m" % [parts_found, total, nearest]
+	elif boss_active:
+		objective.text = "DERROTE O ALFA"
+	else:
+		objective.text = "PEÇAS COMPLETAS  —  FOGUETE  %0.0f m" % d
+
+	_near_rocket = d < 8.0
 	prompt.visible = _near_rocket
+	if _near_rocket:
+		if parts_found < total:
+			prompt.text = "FALTAM  %d  PEÇAS" % (total - parts_found)
+			prompt.add_theme_color_override("font_color", Color(1.0, 0.6, 0.3))
+		elif boss_active:
+			prompt.text = "DERROTE O ALFA PRIMEIRO"
+			prompt.add_theme_color_override("font_color", Color(1.0, 0.4, 0.3))
+		else:
+			prompt.text = "[E]  INSTALAR PEÇAS E ENTRAR"
+			prompt.add_theme_color_override("font_color", Color(0.4, 1.0, 0.9))
 	if _near_rocket and Input.is_action_just_pressed("interact"):
-		_game_over = true
-		Flow.goto_cockpit()
+		if parts_found < total:
+			sfx.play_hurt()
+			_toast("o foguete não voa sem todas as peças", Color(1.0, 0.5, 0.4))
+		elif boss_active:
+			sfx.play_hurt()
+			_toast("o Alfa bloqueia o caminho — mate-o!", Color(1.0, 0.5, 0.4))
+		else:
+			_game_over = true
+			Flow.goto_cockpit()
 
 	# low health heartbeat vignette
 	if player.hp < 30.0 and not player.dead:
@@ -571,15 +898,107 @@ func _on_player_damaged(hp: float) -> void:
 
 func _on_player_died() -> void:
 	_game_over = true
+	Flow.register_death()
 	sfx.set_thrust(0.0)
-	_show_card("YOU DIED", "the swamp keeps your bones\n\nrestarting…")
+	_show_card("VOCÊ MORREU", "o pântano fica com seus ossos\n\nreiniciando…")
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	get_tree().create_timer(2.4).timeout.connect(Flow.restart_phase)
 
 
+func _photo_boss() -> void:
+	card_box.visible = false
+	player.set_physics_process(false)
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	var cam := Camera3D.new()
+	cam.fov = 60.0
+	add_child(cam)
+	cam.current = true
+	parts_found = PART_DEFS.size()
+	_spawn_boss()
+	await get_tree().process_frame
+	boss.set_physics_process(false)
+	boss.rotation.y = 0.0
+	await get_tree().create_timer(0.7).timeout
+	var bp: Vector3 = boss.global_position
+	cam.global_position = bp + Vector3(2.0, 3.2, 8.0)
+	cam.look_at(bp + Vector3(0, 2.0, 0))
+	await get_tree().create_timer(0.4).timeout
+	await RenderingServer.frame_post_draw
+	get_viewport().get_texture().get_image().save_png("/Users/verona/Documents/foguete/.shots/boss.png")
+	get_tree().quit()
+
+
+func _spawn_boss() -> void:
+	boss_active = true
+	sfx.play_screech()
+	cam_shake_toast()
+	# erupts between the player and the rocket
+	var toward := (Vector3(ROCKET_SPOT.pos.x, 0, ROCKET_SPOT.pos.y) - player.global_position)
+	toward.y = 0
+	toward = toward.normalized() if toward.length() > 0.1 else Vector3.FORWARD
+	var bp := player.global_position + toward * 14.0
+	bp.x = clampf(bp.x, Terrain.X_MIN + 6, Terrain.X_MAX - 6)
+	bp.z = clampf(bp.z, Terrain.Z_MIN + 6, Terrain.Z_MAX - 6)
+
+	boss = Alien.new()
+	boss.is_boss = true
+	add_child(boss)
+	boss.global_position = Vector3(bp.x, terrain.get_height(bp.x, bp.z) + 1.0, bp.z)
+	boss.player = player
+	boss.planet = self
+	boss.killed.connect(_on_boss_died)
+	boss.health_changed.connect(_on_boss_health)
+
+	boss_box.visible = true
+	boss_bar.max_value = boss.max_hp
+	boss_bar.value = boss.max_hp
+	_toast("O ALFA DESPERTOU — ele guarda o foguete!", Color(1.0, 0.3, 0.2))
+
+
+func boss_summon(pos: Vector3) -> void:
+	if get_tree().get_nodes_in_group("alien").size() >= ALIEN_MAX_ALIVE + 2:
+		return
+	var ang := _spawn_rng.randf_range(-PI, PI)
+	var off := Vector3(cos(ang), 0, sin(ang)) * 7.0
+	var p := pos + off
+	p.x = clampf(p.x, Terrain.X_MIN + 6, Terrain.X_MAX - 6)
+	p.z = clampf(p.z, Terrain.Z_MIN + 6, Terrain.Z_MAX - 6)
+	p.y = terrain.get_height(p.x, p.z) + 1.0
+	_make_alien(p)
+
+
+func _on_boss_health(cur: int, mx: int) -> void:
+	boss_bar.max_value = mx
+	boss_bar.value = cur
+
+
+func _on_boss_died(pos: Vector3) -> void:
+	boss_active = false
+	boss_defeated = true
+	Flow.kills += 1
+	kills_label.text = "ABATES  %d" % Flow.kills
+	boss_box.visible = false
+	sfx.play_splat()
+	sfx.play_explosion()
+	_burst(pos, Color(0.5, 1.0, 0.3), 220, 16.0)
+	_toast("O ALFA CAIU! Vá para o foguete!", Color(0.4, 1.0, 0.5))
+
+
+func cam_shake_toast() -> void:
+	# brief red screen pulse when the boss appears
+	vignette.color = Color(0.9, 0.1, 0.05, 0.5)
+	var tw := create_tween()
+	tw.tween_property(vignette, "color:a", 0.0, 1.2)
+
+
+func _apply_upgrades() -> void:
+	if is_instance_valid(player):
+		player.apply_upgrades()
+
+
 func _on_alien_killed(pos: Vector3) -> void:
 	Flow.kills += 1
-	kills_label.text = "KILLS  %d" % Flow.kills
+	kills_label.text = "ABATES  %d" % Flow.kills
 	sfx.play_splat()
 	_burst(pos, Color(0.4, 1.0, 0.3), 80, 9.0)
 

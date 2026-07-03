@@ -215,46 +215,29 @@ func _build_rocket() -> void:
 	add_child(rocket)
 
 	var vis := Node3D.new()
-	vis.rotation_degrees = Vector3(90, 0, 0)  # nose points +Z (forward)
+	vis.rotation_degrees = Vector3(90, 0, 0)  # model +Y (tooth crown) -> world +Z (forward)
 	vis.scale = Vector3.ONE * 1.8
 	rocket.add_child(vis)
 
-	var hull := StandardMaterial3D.new()
-	hull.albedo_color = Color(0.85, 0.86, 0.9)
-	hull.metallic = 0.6
-	hull.roughness = 0.35
-	var accent := StandardMaterial3D.new()
-	accent.albedo_color = Color(0.9, 0.25, 0.15)
-	var dark := StandardMaterial3D.new()
-	dark.albedo_color = Color(0.15, 0.15, 0.17)
-	dark.metallic = 0.8
-
-	var body := CylinderMesh.new()
-	body.top_radius = 0.5
-	body.bottom_radius = 0.58
-	body.height = 2.0
-	_vis_mesh(vis, body, hull, Vector3.ZERO)
-	var taper := CylinderMesh.new()
-	taper.top_radius = 0.34
-	taper.bottom_radius = 0.5
-	taper.height = 0.7
-	_vis_mesh(vis, taper, hull, Vector3(0, 1.35, 0))
-	var nose := CylinderMesh.new()
-	nose.top_radius = 0.02
-	nose.bottom_radius = 0.34
-	nose.height = 0.9
-	_vis_mesh(vis, nose, accent, Vector3(0, 2.15, 0))
-	var bell := CylinderMesh.new()
-	bell.top_radius = 0.3
-	bell.bottom_radius = 0.48
-	bell.height = 0.5
-	_vis_mesh(vis, bell, dark, Vector3(0, -1.25, 0))
-	for i in 4:
-		var ang := TAU * i / 4.0 + TAU / 8.0
-		var fin := BoxMesh.new()
-		fin.size = Vector3(0.06, 1.0, 0.5)
-		var f := _vis_mesh(vis, fin, accent, Vector3(sin(ang) * 0.68, -0.7, cos(ang) * 0.68))
-		f.rotation.y = ang
+	# tooth ship — uses the tooth.glb model, crown pointing forward
+	if ResourceLoader.exists("res://tooth.glb"):
+		var tooth := (load("res://tooth.glb") as PackedScene).instantiate()
+		var th := Node3D.new()
+		vis.add_child(th)
+		th.add_child(tooth)
+		var aabb := _scene_aabb(tooth)
+		tooth.position = -aabb.get_center()
+		th.scale = Vector3.ONE * (3.6 / maxf(aabb.size.y, 0.001))
+	else:
+		var hull := StandardMaterial3D.new()
+		hull.albedo_color = Color(0.85, 0.86, 0.9)
+		hull.metallic = 0.6
+		hull.roughness = 0.35
+		var body := CylinderMesh.new()
+		body.top_radius = 0.5
+		body.bottom_radius = 0.58
+		body.height = 2.0
+		_vis_mesh(vis, body, hull, Vector3.ZERO)
 
 	# engine exhaust
 	var exhaust := GPUParticles3D.new()
@@ -319,6 +302,24 @@ func _vis_mesh(parent: Node3D, mesh: Mesh, mat: Material, pos: Vector3) -> MeshI
 	mi.position = pos
 	parent.add_child(mi)
 	return mi
+
+
+func _scene_aabb(node: Node3D) -> AABB:
+	var merged := AABB()
+	var started := false
+	var stack: Array = [[node, Transform3D.IDENTITY]]
+	while not stack.is_empty():
+		var item: Array = stack.pop_back()
+		var n: Node = item[0]
+		var xf: Transform3D = item[1]
+		if n is VisualInstance3D:
+			var a: AABB = xf * (n as VisualInstance3D).get_aabb()
+			merged = a if not started else merged.merge(a)
+			started = true
+		for c in n.get_children():
+			if c is Node3D:
+				stack.append([c, xf * (c as Node3D).transform])
+	return merged
 
 
 func _build_hud() -> void:
