@@ -45,6 +45,9 @@ var rng := RandomNumberGenerator.new()
 var obstacles: Array[Dictionary] = []
 var shots: Array[Dictionary] = []
 var enemy_shots: Array[Dictionary] = []
+var _asteroid_meshes: Array = []   # malhas coletadas dos GLBs de asteroide
+var _ship_scene: PackedScene       # nave inimiga (glb)
+var _sat_scene: PackedScene        # satélite (glb)
 
 var hud: CanvasLayer
 var shield_label: Label
@@ -74,6 +77,7 @@ func _ready() -> void:
 	voice.piu_detected.connect(_voice_fire)
 	_build_environment()
 	_build_rocket()
+	_load_asteroids()
 	_build_hud()
 	_show_card("ASCENT", "WASD or head-lean steer · LMB or \"PIU!\" fires\nSMILE to boost · survive to the Moon")
 	get_tree().create_timer(2.5).timeout.connect(func () -> void:
@@ -602,92 +606,128 @@ func _spawn_pos() -> Vector3:
 
 func _spawn_satellite() -> void:
 	var n := Node3D.new()
-	var body_mat := StandardMaterial3D.new()
-	body_mat.albedo_color = Color(0.6, 0.62, 0.68)
-	body_mat.metallic = 0.7
-	body_mat.roughness = 0.4
-	var panel_mat := StandardMaterial3D.new()
-	panel_mat.albedo_color = Color(0.1, 0.2, 0.5)
-	panel_mat.metallic = 0.4
-	panel_mat.roughness = 0.3
-	var body := BoxMesh.new()
-	body.size = Vector3(1.2, 1.2, 1.8)
-	_vis_mesh(n, body, body_mat, Vector3.ZERO)
-	for side in [-1.0, 1.0]:
-		var panel := BoxMesh.new()
-		panel.size = Vector3(2.6, 0.06, 1.2)
-		_vis_mesh(n, panel, panel_mat, Vector3(2.0 * side, 0, 0))
-	var dish := CylinderMesh.new()
-	dish.top_radius = 0.5
-	dish.bottom_radius = 0.1
-	dish.height = 0.3
-	_vis_mesh(n, dish, body_mat, Vector3(0, 0.8, 0))
+	if _sat_scene != null:
+		var mi := _sat_scene.instantiate()
+		mi.scale = Vector3.ONE * 8.5           # bbox ~0.5 u -> ~4.3 u
+		n.add_child(mi)
+	else:
+		# fallback: satélite procedural
+		var body_mat := StandardMaterial3D.new()
+		body_mat.albedo_color = Color(0.6, 0.62, 0.68)
+		body_mat.metallic = 0.7
+		body_mat.roughness = 0.4
+		var panel_mat := StandardMaterial3D.new()
+		panel_mat.albedo_color = Color(0.1, 0.2, 0.5)
+		panel_mat.metallic = 0.4
+		panel_mat.roughness = 0.3
+		var body := BoxMesh.new()
+		body.size = Vector3(1.2, 1.2, 1.8)
+		_vis_mesh(n, body, body_mat, Vector3.ZERO)
+		for side in [-1.0, 1.0]:
+			var panel := BoxMesh.new()
+			panel.size = Vector3(2.6, 0.06, 1.2)
+			_vis_mesh(n, panel, panel_mat, Vector3(2.0 * side, 0, 0))
+		var dish := CylinderMesh.new()
+		dish.top_radius = 0.5
+		dish.bottom_radius = 0.1
+		dish.height = 0.3
+		_vis_mesh(n, dish, body_mat, Vector3(0, 0.8, 0))
 	add_child(n)
 	n.global_position = _spawn_pos()
 	obstacles.append({ "node": n, "vel": Vector3(0, 0, -55), "hp": 2, "radius": 2.4,
 		"type": "sat", "spin": Vector3(rng.randf_range(-1, 1), rng.randf_range(-1, 1), rng.randf_range(-1, 1)) })
 
 
+# coleta as malhas dos GLBs de asteroide, normalizando cada uma p/ ~raio de colisão
+func _load_asteroids() -> void:
+	for path in ["res://assets/asteroid_low_poly.glb", "res://assets/asteroids_pack.glb"]:
+		if not ResourceLoader.exists(path):
+			continue
+		var scene: PackedScene = load(path)
+		if scene == null:
+			continue
+		var inst := scene.instantiate()
+		_collect_asteroid_meshes(inst)
+		inst.free()
+	if ResourceLoader.exists("res://assets/enemy_ship.glb"):
+		_ship_scene = load("res://assets/enemy_ship.glb")
+	if ResourceLoader.exists("res://assets/satellite.glb"):
+		_sat_scene = load("res://assets/satellite.glb")
+
+
+func _collect_asteroid_meshes(node: Node) -> void:
+	if node is MeshInstance3D:
+		var mi := node as MeshInstance3D
+		if mi.mesh != null:
+			var aabb: AABB = mi.mesh.get_aabb()
+			var maxdim: float = maxf(aabb.size.x, maxf(aabb.size.y, aabb.size.z))
+			var base: float = (2.4 / maxdim) if maxdim > 0.0 else 1.0
+			_asteroid_meshes.append({ "mesh": mi.mesh, "scale": base, "mat": mi.material_override })
+	for c in node.get_children():
+		_collect_asteroid_meshes(c)
+
+
 func _spawn_comet() -> void:
 	var n := Node3D.new()
-	var rock_mat := StandardMaterial3D.new()
-	rock_mat.albedo_color = Color(0.45, 0.4, 0.38)
-	rock_mat.roughness = 0.9
-	var core := SphereMesh.new()
-	core.radius = 1.3
-	core.height = 2.6
-	var c := _vis_mesh(n, core, rock_mat, Vector3.ZERO)
-	c.scale = Vector3(1.0, 0.85, 1.1)
-	var tail_mat := StandardMaterial3D.new()
-	tail_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	tail_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	tail_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
-	tail_mat.albedo_color = Color(0.5, 0.8, 1.0, 0.3)
-	tail_mat.emission_enabled = true
-	tail_mat.emission = Color(0.5, 0.8, 1.0)
-	tail_mat.emission_energy_multiplier = 1.2
-	var tail := CylinderMesh.new()
-	tail.top_radius = 0.1
-	tail.bottom_radius = 1.1
-	tail.height = 9.0
-	tail.material = tail_mat
-	var t := MeshInstance3D.new()
-	t.mesh = tail
-	t.rotation_degrees = Vector3(-90, 0, 0)
-	t.position = Vector3(0, 0, 5.0)
-	n.add_child(t)
+	if _asteroid_meshes.size() > 0:
+		var a: Dictionary = _asteroid_meshes[rng.randi() % _asteroid_meshes.size()]
+		var mi := MeshInstance3D.new()
+		mi.mesh = a["mesh"]
+		if a.get("mat") != null:
+			mi.material_override = a["mat"]
+		mi.scale = Vector3.ONE * (float(a["scale"]) * rng.randf_range(0.75, 1.5))
+		mi.rotation = Vector3(rng.randf_range(0, TAU), rng.randf_range(0, TAU), rng.randf_range(0, TAU))
+		n.add_child(mi)
+	else:
+		# fallback: rocha procedural
+		var rock_mat := StandardMaterial3D.new()
+		rock_mat.albedo_color = Color(0.45, 0.4, 0.38)
+		rock_mat.roughness = 0.9
+		var core := SphereMesh.new()
+		core.radius = 1.3
+		core.height = 2.6
+		var c := _vis_mesh(n, core, rock_mat, Vector3.ZERO)
+		c.scale = Vector3(1.0, 0.85, 1.1)
 	add_child(n)
 	n.global_position = _spawn_pos()
 	obstacles.append({ "node": n, "vel": Vector3(rng.randf_range(-4, 4), rng.randf_range(-2, 2), -80),
-		"hp": 1, "radius": 2.6, "type": "comet", "spin": Vector3(1.5, 0, 0) })
+		"hp": 1, "radius": 2.6, "type": "comet",
+		"spin": Vector3(rng.randf_range(0.6, 1.8), rng.randf_range(-0.6, 0.6), rng.randf_range(-0.4, 0.4)) })
 
 
 func _spawn_ship() -> void:
 	var n := Node3D.new()
-	var hull_mat := StandardMaterial3D.new()
-	hull_mat.albedo_color = Color(0.16, 0.14, 0.2)
-	hull_mat.metallic = 0.8
-	hull_mat.roughness = 0.35
-	var glow_mat := StandardMaterial3D.new()
-	glow_mat.albedo_color = Color(0.05, 0.02, 0.02)
-	glow_mat.emission_enabled = true
-	glow_mat.emission = Color(1.0, 0.25, 0.15)
-	glow_mat.emission_energy_multiplier = 3.0
-	var body := PrismMesh.new()
-	body.size = Vector3(2.6, 0.7, 2.4)
-	var b := _vis_mesh(n, body, hull_mat, Vector3.ZERO)
-	b.rotation_degrees = Vector3(-90, 0, 0)
-	var cockpit_m := SphereMesh.new()
-	cockpit_m.radius = 0.35
-	cockpit_m.height = 0.7
-	_vis_mesh(n, cockpit_m, glow_mat, Vector3(0, 0.3, -0.3))
-	for side in [-1.0, 1.0]:
-		var eng := CylinderMesh.new()
-		eng.top_radius = 0.15
-		eng.bottom_radius = 0.22
-		eng.height = 0.5
-		var e := _vis_mesh(n, eng, glow_mat, Vector3(0.9 * side, 0, 1.1))
-		e.rotation_degrees = Vector3(90, 0, 0)
+	if _ship_scene != null:
+		var mi := _ship_scene.instantiate()
+		mi.scale = Vector3.ONE * 0.45          # bbox ~12 u -> ~5.5 u
+		mi.rotation_degrees = Vector3(0, 180, 0)  # nariz virado p/ o jogador (-Z)
+		n.add_child(mi)
+	else:
+		# fallback: nave procedural
+		var hull_mat := StandardMaterial3D.new()
+		hull_mat.albedo_color = Color(0.16, 0.14, 0.2)
+		hull_mat.metallic = 0.8
+		hull_mat.roughness = 0.35
+		var glow_mat := StandardMaterial3D.new()
+		glow_mat.albedo_color = Color(0.05, 0.02, 0.02)
+		glow_mat.emission_enabled = true
+		glow_mat.emission = Color(1.0, 0.25, 0.15)
+		glow_mat.emission_energy_multiplier = 3.0
+		var body := PrismMesh.new()
+		body.size = Vector3(2.6, 0.7, 2.4)
+		var b := _vis_mesh(n, body, hull_mat, Vector3.ZERO)
+		b.rotation_degrees = Vector3(-90, 0, 0)
+		var cockpit_m := SphereMesh.new()
+		cockpit_m.radius = 0.35
+		cockpit_m.height = 0.7
+		_vis_mesh(n, cockpit_m, glow_mat, Vector3(0, 0.3, -0.3))
+		for side in [-1.0, 1.0]:
+			var eng := CylinderMesh.new()
+			eng.top_radius = 0.15
+			eng.bottom_radius = 0.22
+			eng.height = 0.5
+			var e := _vis_mesh(n, eng, glow_mat, Vector3(0.9 * side, 0, 1.1))
+			e.rotation_degrees = Vector3(90, 0, 0)
 	add_child(n)
 	n.global_position = _spawn_pos()
 	obstacles.append({ "node": n, "vel": Vector3(0, 0, -42), "hp": 3, "radius": 2.2,
