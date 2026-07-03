@@ -1,12 +1,17 @@
 class_name Sfx
 extends Node
-## All audio is synthesized at startup — no asset files needed.
+## All audio is synthesized at startup. Exception: the rocket sounds are
+## recorded WAVs in res://audio/ — each falls back to its synth version
+## when the file is missing.
 
 const RATE := 22050
 
 var thruster: AudioStreamPlayer
+var thruster_base_db := -4.0
 var drone: AudioStreamPlayer
 var boom: AudioStreamPlayer
+var crash: AudioStreamPlayer
+var ship_boom: AudioStreamPlayer
 var chime: AudioStreamPlayer
 var beep: AudioStreamPlayer
 var laser: AudioStreamPlayer
@@ -22,9 +27,16 @@ var whoosh: AudioStreamPlayer
 
 
 func _ready() -> void:
-	thruster = _mk_player(_gen_thruster(), -60.0, true)
+	var engine_wav := _load_wav("res://audio/rocket_engine_flying.wav", true)
+	if engine_wav != null:
+		thruster_base_db = -16.0  # the recording is much hotter than the synth loop
+	thruster = _mk_player(engine_wav if engine_wav != null else _gen_thruster(), -60.0, true)
 	drone = _mk_player(_gen_drone(), -16.0, true)
 	boom = _mk_player(_gen_explosion(), -2.0, false)
+	var crash_wav := _load_wav("res://audio/rocket_crash.wav")
+	crash = _mk_player(crash_wav, -4.0, false) if crash_wav != null else null
+	var ship_wav := _load_wav("res://audio/rocket_explosion.wav")
+	ship_boom = _mk_player(ship_wav, -2.0, false) if ship_wav != null else null
 	chime = _mk_player(_gen_chime(), -6.0, false)
 	beep = _mk_player(_gen_beep(), -10.0, false)
 	laser = _mk_player(_gen_laser(1400.0, 250.0, 0.16), -8.0, false)
@@ -38,7 +50,8 @@ func _ready() -> void:
 	tick = _mk_player(_gen_tone(1200.0, 0.06), -14.0, false)
 	voice = _mk_player(_gen_voice_blip(), -13.0, false)
 	radio = _mk_player(_gen_radio_crackle(), -12.0, false)
-	whoosh = _mk_player(_gen_boost(), -4.0, false)
+	var boost_wav := _load_wav("res://audio/rocket_boost.wav")
+	whoosh = _mk_player(boost_wav if boost_wav != null else _gen_boost(), -4.0, false)
 	thruster.play()
 	drone.play()
 
@@ -47,12 +60,26 @@ func set_thrust(level: float) -> void:
 	if level < 0.02:
 		thruster.volume_db = -60.0
 	else:
-		thruster.volume_db = linear_to_db(clampf(level, 0.0, 1.0)) - 4.0
+		thruster.volume_db = linear_to_db(clampf(level, 0.0, 1.0)) + thruster_base_db
 		thruster.pitch_scale = 0.9 + level * 0.25
 
 
 func play_explosion() -> void:
 	boom.play()
+
+
+func play_ship_explosion() -> void:
+	if ship_boom != null:
+		ship_boom.play()
+	else:
+		boom.play()
+
+
+func play_crash() -> void:
+	if crash != null:
+		crash.play()
+	else:
+		hurt.play()
 
 
 func play_chime() -> void:
@@ -102,6 +129,19 @@ func play_radio() -> void:
 
 func play_boost() -> void:
 	whoosh.play()
+
+
+func _load_wav(path: String, loop := false) -> AudioStream:
+	if not ResourceLoader.exists(path):
+		return null
+	var stream: AudioStream = load(path)
+	if loop and stream is AudioStreamWAV:
+		var wav: AudioStreamWAV = stream
+		var bytes_per_frame := (2 if wav.format == AudioStreamWAV.FORMAT_16_BITS else 1) * (2 if wav.stereo else 1)
+		wav.loop_mode = AudioStreamWAV.LOOP_FORWARD
+		wav.loop_begin = 0
+		wav.loop_end = wav.data.size() / bytes_per_frame
+	return stream
 
 
 func _mk_player(stream: AudioStream, vol_db: float, _loop: bool) -> AudioStreamPlayer:
