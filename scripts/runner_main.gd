@@ -1,7 +1,7 @@
 extends Node3D
 ## Phase 3 — the ascent. Dodge debris, shoot back, reach the Moon.
 
-const RUN_TIME := 75.0
+const RUN_TIME := 32.0
 const BOUNDS_X := 16.0
 const BOUNDS_Y_MIN := -8.0
 const BOUNDS_Y_MAX := 11.0
@@ -12,6 +12,16 @@ const BOOST_MULT := 1.9
 const BOOST_COOLDOWN := 1.2
 const FACE_GAIN := 1.6
 const FACE_DEADZONE := 0.12
+
+# Mathias Cabeludo radios the ascent briefing over the helmet HUD.
+const MATHIAS_LINES := [
+	"Câmbio, piloto! Aqui é o Mathias Cabeludo, controle orbital — o do cabelão que não cabe no capacete.",
+	"Você escapou do pântano, mas agora vem o filé: o corredor de destroços entre você e a Lua.",
+	"Vai chover asteroide, satélite morto e nave inimiga. Desvia inclinando a cabeça e grita 'PIU!' pra atirar.",
+	"Precisa de pique numa reta limpa? SORRI. O sensor chuta o turbo por dois segundos. Abusa com juízo.",
+	"Aguenta a subida até a órbita da Lua. Se virar poeira, a gente relança — mas não vira, né, recruta?",
+	"Cabelo pra trás e manda ver. Mathias Cabeludo, desligo. Câmbio!",
+]
 
 var sfx: Sfx
 var face: FaceControl
@@ -79,17 +89,36 @@ func _ready() -> void:
 	_build_rocket()
 	_load_asteroids()
 	_build_hud()
+	# Mathias Cabeludo radios in first; the ascent card + countdown wait for him.
+	# Photo / ending-shortcut runs skip straight to the intro so nothing is blocked.
+	if OS.get_environment("FOGUETE_PHOTO") == "1" or OS.get_environment("FOGUETE_ENDING") == "1":
+		_begin_intro()
+	else:
+		_briefing()
+	if OS.get_environment("FOGUETE_PHOTO") == "1":
+		_photo.call_deferred()
+	# atalho de dev: pula direto para a cinemática de pouso, sem jogar o jogo todo
+	if OS.get_environment("FOGUETE_ENDING") == "1":
+		_win.call_deferred()
+
+
+func _briefing() -> void:
+	var b := CaptainBriefing.new()
+	b.setup(sfx, MATHIAS_LINES, "MATHIAS CABELUDO", "res://assets/mathias_cabeludo.png",
+		"TRANSMISSÃO AO VIVO — MATHIAS CABELUDO")
+	b.dwell_time = 2.5  # readable pace (SPACE/E still skips each line)
+	add_child(b)
+	b.finished.connect(_begin_intro)
+
+
+func _begin_intro() -> void:
+	# state stays "intro" (so _process holds) until this countdown flips it to "flying"
 	_show_card("ASCENT", "WASD or head-lean steer · LMB or \"PIU!\" fires\nSMILE to boost · survive to the Moon")
 	get_tree().create_timer(2.5).timeout.connect(func () -> void:
 		if state == "intro":
 			state = "flying"
 			_fade_card()
 	)
-	if OS.get_environment("FOGUETE_PHOTO") == "1":
-		_photo.call_deferred()
-	# atalho de dev: pula direto para a cinemática de pouso, sem jogar o jogo todo
-	if OS.get_environment("FOGUETE_ENDING") == "1":
-		_win.call_deferred()
 
 
 func _start_music() -> void:

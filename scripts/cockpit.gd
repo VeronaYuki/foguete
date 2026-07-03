@@ -8,6 +8,16 @@ enum PolishState { IDLE, SHOWING, INPUT, DONE }
 
 const POLISH_LEN := 6
 
+# Sami radios the pre-flight restoration briefing over the helmet HUD.
+const SAMI_LINES := [
+	"Aqui é a Sami, do Hangar Odonto. Deixa eu ver esse sorriso... eita, que dente-nave mais maltratado!",
+	"O tombo no pântano de VH-9 rachou o esmalte e entupiu os canais. Assim essa belezura não decola.",
+	"Três procedimentos, piloto: OBTURAÇÃO pra tapar as cáries do casco e CANAL pra religar os propulsores da raiz.",
+	"E o POLIMENTO: repete no dente central a sequência de escovação que eu mostrar. Sem pular etapa.",
+	"Caprichado, hein? Flúor de reserva é a única coisa que a gente NÃO tem sobrando aqui.",
+	"Acendeu os três em verde, é só apertar DECOLAR COM FLÚOR. Boa consulta lá em cima. Câmbio.",
+]
+
 var sfx: Sfx
 var rng := RandomNumberGenerator.new()
 
@@ -42,6 +52,17 @@ func _ready() -> void:
 
 	if OS.get_environment("FOGUETE_PHOTO") == "1":
 		_photo.call_deferred()
+	else:
+		_briefing()
+
+
+func _briefing() -> void:
+	# Sami radios in over the HUD, but the consoles stay live so you can start
+	# the procedures while she's still talking (presentation flow).
+	var b := CaptainBriefing.new()
+	b.setup(sfx, SAMI_LINES, "SAMI", "res://assets/sami.png",
+		"TRANSMISSÃO AO VIVO — SAMI")
+	add_child(b)
 
 
 func _photo() -> void:

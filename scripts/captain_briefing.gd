@@ -21,6 +21,9 @@ var portrait_path := "res://assets/gus.png"
 var banner := "TRANSMISSÃO AO VIVO — CAPITÃO GUS"
 
 var sfx: Sfx
+# pacing (tunable per instance): seconds per typed char, and pause before auto-advance
+var char_time := 0.03
+var dwell_time := 2.4
 var _line := 0
 var _shown := 0
 var _char_t := 0.0
@@ -64,6 +67,10 @@ func _ready() -> void:
 	visor.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var vmat := ShaderMaterial.new()
 	vmat.shader = load("res://shaders/helmet_visor.gdshader")
+	# Touch the uniform once so it's registered as a tweenable property (an
+	# untouched shader default isn't in the material's property list yet, which
+	# is why the _finish() strength-tween used to error out).
+	vmat.set_shader_parameter("strength", 0.92)
 	visor.material = vmat
 	root.add_child(visor)
 
@@ -80,12 +87,12 @@ func _ready() -> void:
 	dot_sb.set_corner_radius_all(8)
 	rec_dot.add_theme_stylebox_override("panel", dot_sb)
 	top.add_child(rec_dot)
-	top.add_child(_lbl(banner, 18, Color(0.6, 0.85, 1.0)))
+	top.add_child(_lbl(banner, 26, Color(0.6, 0.85, 1.0)))
 
 	# comms panel bottom-left: portrait + name + subtitle
 	var panel := PanelContainer.new()
 	panel.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
-	panel.position = Vector2(0, -220)
+	panel.position = Vector2(0, -440)
 	panel.offset_left = 40
 	panel.offset_right = -40
 	var psb := StyleBoxFlat.new()
@@ -116,7 +123,7 @@ func _ready() -> void:
 	portrait = TextureRect.new()
 	portrait.texture = load(portrait_path)
 	portrait.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
-	portrait.custom_minimum_size = Vector2(150, 180)
+	portrait.custom_minimum_size = Vector2(320, 384)
 	portrait.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	frame.add_child(portrait)
 
@@ -124,14 +131,14 @@ func _ready() -> void:
 	text_col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	text_col.add_theme_constant_override("separation", 8)
 	row.add_child(text_col)
-	name_label = _lbl(speaker, 24, Color(1.0, 0.8, 0.3))
+	name_label = _lbl(speaker, 36, Color(1.0, 0.8, 0.3))
 	text_col.add_child(name_label)
-	subtitle = _lbl("", 22, Color(0.92, 0.95, 1.0))
+	subtitle = _lbl("", 30, Color(0.92, 0.95, 1.0))
 	subtitle.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	subtitle.custom_minimum_size = Vector2(0, 80)
+	subtitle.custom_minimum_size = Vector2(0, 150)
 	subtitle.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	text_col.add_child(subtitle)
-	skip_hint = _lbl("[ESPAÇO] avançar", 14, Color(0.5, 0.6, 0.7))
+	skip_hint = _lbl("[ESPAÇO] avançar", 18, Color(0.5, 0.6, 0.7))
 	text_col.add_child(skip_hint)
 
 	_start_line()
@@ -178,8 +185,8 @@ func _process(delta: float) -> void:
 	if _shown < line.length():
 		_char_t += delta
 		_blip_t += delta
-		while _char_t >= 0.03 and _shown < line.length():
-			_char_t -= 0.03
+		while _char_t >= char_time and _shown < line.length():
+			_char_t -= char_time
 			_shown += 1
 		subtitle.text = line.substr(0, _shown)
 		if _blip_t >= 0.055 and sfx:
@@ -189,7 +196,7 @@ func _process(delta: float) -> void:
 				sfx.play_voice(randf_range(0.9, 1.25))
 	else:
 		_dwell += delta
-		if _dwell >= 2.4:
+		if _dwell >= dwell_time:
 			_next_line()
 
 
