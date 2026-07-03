@@ -38,10 +38,21 @@ func _ready() -> void:
 	rng.seed = 4242
 	sfx = Sfx.new()
 	add_child(sfx)
+	_start_music()
 	_build_ui()
 
 	if OS.get_environment("FOGUETE_PHOTO") == "1":
 		_photo.call_deferred()
+
+
+func _start_music() -> void:
+	var stream: AudioStreamMP3 = load("res://audio/Hangar.mp3")
+	stream.loop = true
+	var music := AudioStreamPlayer.new()
+	music.stream = stream
+	music.volume_db = -8.0
+	add_child(music)
+	music.play()
 
 
 func _photo() -> void:
