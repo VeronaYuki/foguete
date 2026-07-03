@@ -90,8 +90,11 @@ func _ready() -> void:
 	_load_asteroids()
 	_build_hud()
 	# Mathias Cabeludo radios in first; the ascent card + countdown wait for him.
+	# On a restart we skip the transmission AND the card — straight into flying.
 	# Photo / ending-shortcut runs skip straight to the intro so nothing is blocked.
-	if OS.get_environment("FOGUETE_PHOTO") == "1" or OS.get_environment("FOGUETE_ENDING") == "1":
+	if Flow.consume_skip_intro():
+		state = "flying"
+	elif OS.get_environment("FOGUETE_PHOTO") == "1" or OS.get_environment("FOGUETE_ENDING") == "1":
 		_begin_intro()
 	else:
 		_briefing()

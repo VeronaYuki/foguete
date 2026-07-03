@@ -52,7 +52,8 @@ func _ready() -> void:
 
 	if OS.get_environment("FOGUETE_PHOTO") == "1":
 		_photo.call_deferred()
-	else:
+	elif not Flow.consume_skip_intro():
+		# on a restart, skip Sami's transmission — the consoles are already live
 		_briefing()
 
 

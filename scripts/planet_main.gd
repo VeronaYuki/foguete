@@ -80,6 +80,11 @@ func _ready() -> void:
 		_photo_boss.call_deferred()
 		return
 
+	# On a restart, skip Gus's transmission and drop straight into the hunt.
+	if Flow.consume_skip_intro():
+		_start_hunt()
+		return
+
 	# Captain Gus radios the mission briefing over the helmet HUD;
 	# freeze movement (the player can still look around) until he's done
 	player.set_physics_process(false)
@@ -105,13 +110,17 @@ func _ready() -> void:
 			player.set_physics_process(true)
 		for a in get_tree().get_nodes_in_group("alien"):
 			a.set_physics_process(true)
-		hud.visible = true
-		_show_card("BOA CAÇADA, RECRUTA",
-			"WASD mover · SHIFT correr · ESPAÇO pular · Q esquiva · LMB atirar · E interagir")
-		get_tree().create_timer(3.5).timeout.connect(func () -> void:
-			if not _game_over:
-				_fade_card()
-		)
+		_start_hunt()
+	)
+
+
+func _start_hunt() -> void:
+	hud.visible = true
+	_show_card("BOA CAÇADA, RECRUTA",
+		"WASD mover · SHIFT correr · ESPAÇO pular · Q esquiva · LMB atirar · E interagir")
+	get_tree().create_timer(3.5).timeout.connect(func () -> void:
+		if not _game_over:
+			_fade_card()
 	)
 
 

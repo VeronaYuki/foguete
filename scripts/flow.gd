@@ -21,6 +21,9 @@ var kills := 0
 var run_time := 0.0
 var timing := false
 var current_mission := 1
+# set by restart_phase(); a phase consumes it in _ready to skip its intro
+# transmission and drop the player straight back into gameplay.
+var skip_intro := false
 
 # --- persisted campaign state ---
 var data := {}
@@ -189,9 +192,17 @@ func finish() -> void:
 
 
 func restart_phase() -> void:
+	skip_intro = true
 	Engine.time_scale = 1.0
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	get_tree().reload_current_scene()
+
+
+func consume_skip_intro() -> bool:
+	# true exactly once after a restart, then clears itself
+	var v := skip_intro
+	skip_intro = false
+	return v
 
 
 func _change(path: String) -> void:
