@@ -59,86 +59,53 @@ func _ready() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 
+const BRUSH_GLB := "res://electric-toothbrush/source/SM_ORAL_B_Brush_glb.glb"
+
+
 func _build_gun() -> void:
 	gun = Node3D.new()
 	gun.position = Vector3(0.3, -0.28, -0.5)
 	cam.add_child(gun)
 
-	var metal := StandardMaterial3D.new()
-	metal.albedo_color = Color(0.14, 0.15, 0.18)
-	metal.metallic = 0.85
-	metal.roughness = 0.3
-
-	var polymer := StandardMaterial3D.new()
-	polymer.albedo_color = Color(0.09, 0.095, 0.11)
-	polymer.metallic = 0.1
-	polymer.roughness = 0.75
-
-	var glow := StandardMaterial3D.new()
-	glow.albedo_color = Color(0.02, 0.02, 0.02)
-	glow.emission_enabled = true
-	glow.emission = Color(0.3, 1.0, 0.8)
-	glow.emission_energy_multiplier = 2.4
-
-	# receiver
-	_gun_box(metal, Vector3(0.085, 0.13, 0.46), Vector3(0, 0, 0.02))
-	# barrel shroud + inner barrel + muzzle brake
-	_gun_box(polymer, Vector3(0.075, 0.085, 0.34), Vector3(0, 0.02, -0.36))
-	var barrel := CylinderMesh.new()
-	barrel.top_radius = 0.022
-	barrel.bottom_radius = 0.022
-	barrel.height = 0.5
-	var b := _gun_mesh(barrel, metal, Vector3(0, 0.03, -0.42))
-	b.rotation_degrees = Vector3(90, 0, 0)
-	var brake := CylinderMesh.new()
-	brake.top_radius = 0.036
-	brake.bottom_radius = 0.036
-	brake.height = 0.09
-	var br := _gun_mesh(brake, metal, Vector3(0, 0.03, -0.66))
-	br.rotation_degrees = Vector3(90, 0, 0)
-	# glowing muzzle ring
-	var ring := TorusMesh.new()
-	ring.inner_radius = 0.03
-	ring.outer_radius = 0.045
-	var rg := _gun_mesh(ring, glow, Vector3(0, 0.03, -0.7))
-	rg.rotation_degrees = Vector3(90, 0, 0)
-	# stock, grip, magazine
-	var stock := _gun_box(polymer, Vector3(0.07, 0.11, 0.22), Vector3(0, -0.03, 0.33))
-	stock.rotation_degrees = Vector3(-6, 0, 0)
-	var grip := _gun_box(polymer, Vector3(0.05, 0.15, 0.07), Vector3(0, -0.12, 0.15))
-	grip.rotation_degrees = Vector3(18, 0, 0)
-	var mag := _gun_box(metal, Vector3(0.055, 0.16, 0.09), Vector3(0, -0.14, -0.02))
-	mag.rotation_degrees = Vector3(-10, 0, 0)
-	# top rail + sight with glowing dot
-	_gun_box(metal, Vector3(0.03, 0.02, 0.4), Vector3(0, 0.085, -0.08))
-	_gun_box(metal, Vector3(0.04, 0.05, 0.05), Vector3(0, 0.115, 0.05))
-	_gun_box(glow, Vector3(0.012, 0.012, 0.012), Vector3(0, 0.125, 0.03))
-	# energy cell + side strips
-	_gun_box(glow, Vector3(0.09, 0.03, 0.1), Vector3(0, -0.045, 0.12))
-	for side in [-1.0, 1.0]:
-		_gun_box(glow, Vector3(0.004, 0.015, 0.3), Vector3(0.045 * side, 0.02, -0.1))
+	# electric toothbrush model as the weapon
+	var brush := (load(BRUSH_GLB) as PackedScene).instantiate()
+	var holder := Node3D.new()
+	gun.add_child(holder)
+	holder.add_child(brush)
+	var aabb := _scene_aabb(brush)
+	# center the model, then scale so its long axis reads as a held gadget
+	brush.position = -aabb.get_center()
+	var longest := maxf(aabb.size.x, maxf(aabb.size.y, aabb.size.z))
+	holder.scale = Vector3.ONE * (0.55 / maxf(longest, 0.001))
+	# orient: long axis already runs along Z; lay it flat pointing down-range
+	# (-Z), tuned by eye from the FOGUETE_PHOTO_GUN capture.
+	holder.rotation_degrees = Vector3(-8, 0, 4)
+	holder.position = Vector3(-0.05, -0.02, 0.05)
 
 	muzzle_light = OmniLight3D.new()
-	muzzle_light.position = Vector3(0, 0.03, -0.75)
+	muzzle_light.position = Vector3(0, 0.03, -0.55)
 	muzzle_light.light_color = Color(0.4, 1.0, 0.85)
 	muzzle_light.light_energy = 0.0
 	muzzle_light.omni_range = 10.0
 	gun.add_child(muzzle_light)
 
 
-func _gun_box(mat: Material, size: Vector3, pos: Vector3) -> MeshInstance3D:
-	var m := BoxMesh.new()
-	m.size = size
-	return _gun_mesh(m, mat, pos)
-
-
-func _gun_mesh(mesh: Mesh, mat: Material, pos: Vector3) -> MeshInstance3D:
-	var mi := MeshInstance3D.new()
-	mi.mesh = mesh
-	mi.material_override = mat
-	mi.position = pos
-	gun.add_child(mi)
-	return mi
+func _scene_aabb(node: Node3D) -> AABB:
+	var merged := AABB()
+	var started := false
+	var stack: Array = [[node, Transform3D.IDENTITY]]
+	while not stack.is_empty():
+		var item: Array = stack.pop_back()
+		var n: Node = item[0]
+		var xf: Transform3D = item[1]
+		if n is VisualInstance3D:
+			var a: AABB = xf * (n as VisualInstance3D).get_aabb()
+			merged = a if not started else merged.merge(a)
+			started = true
+		for c in n.get_children():
+			if c is Node3D:
+				stack.append([c, xf * (c as Node3D).transform])
+	return merged
 
 
 func _unhandled_input(event: InputEvent) -> void:

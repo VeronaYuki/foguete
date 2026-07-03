@@ -57,6 +57,15 @@ func _ready() -> void:
 		_photo_mode.call_deferred()
 		return
 
+	# capture the first-person view (to check the gun) from the player camera
+	if OS.get_environment("FOGUETE_PHOTO_GUN") == "1":
+		get_tree().create_timer(1.0).timeout.connect(func () -> void:
+			await RenderingServer.frame_post_draw
+			get_viewport().get_texture().get_image().save_png("/Users/verona/Documents/foguete/.shots/gun.png")
+			get_tree().quit()
+		)
+		return
+
 	# Captain Gus radios the mission briefing over the helmet HUD;
 	# freeze movement (the player can still look around) until he's done
 	player.set_physics_process(false)
@@ -248,6 +257,25 @@ func _scatter_rocks(rng: RandomNumberGenerator) -> void:
 		placed += 1
 
 
+func _scene_aabb(node: Node3D) -> AABB:
+	# merged AABB in node's local space, without needing to be in the tree
+	var merged := AABB()
+	var started := false
+	var stack: Array = [[node, Transform3D.IDENTITY]]
+	while not stack.is_empty():
+		var item: Array = stack.pop_back()
+		var n: Node = item[0]
+		var xf: Transform3D = item[1]
+		if n is VisualInstance3D:
+			var a: AABB = xf * (n as VisualInstance3D).get_aabb()
+			merged = a if not started else merged.merge(a)
+			started = true
+		for c in n.get_children():
+			if c is Node3D:
+				stack.append([c, xf * (c as Node3D).transform])
+	return merged
+
+
 func _dist_to_path(p: Vector2, path: Array) -> float:
 	var best := 1e9
 	for i in path.size() - 1:
@@ -276,20 +304,17 @@ func _build_rocket() -> void:
 	root.add_child(col)
 
 	# imported tooth model — the ship is a giant molar (Capim = dental co.)
-	var tooth_mesh := load("res://tooth/source/DenteJpeg/Dente.obj") as Mesh
-	var tmi := MeshInstance3D.new()
-	tmi.mesh = tooth_mesh
-	var taabb := tooth_mesh.get_aabb()
+	var tooth := (load("res://tooth.glb") as PackedScene).instantiate()
+	var holder := Node3D.new()
+	root.add_child(holder)
+	holder.add_child(tooth)
+	var taabb := _scene_aabb(tooth)
 	var ts := 3.8 / maxf(taabb.size.y, 0.001)
-	tmi.scale = Vector3.ONE * ts
-	tmi.position = -taabb.get_center() * ts
-	# apply the tooth texture if the OBJ import didn't carry a material
-	if tooth_mesh.get_surface_count() > 0 and tooth_mesh.surface_get_material(0) == null:
-		var tm := StandardMaterial3D.new()
-		tm.albedo_texture = load("res://tooth/source/DenteJpeg/Dente.jpg")
-		tm.roughness = 0.4
-		tmi.material_override = tm
-	root.add_child(tmi)
+	tooth.position = -Vector3(
+		taabb.position.x + taabb.size.x * 0.5,
+		taabb.position.y,
+		taabb.position.z + taabb.size.z * 0.5)
+	holder.scale = Vector3.ONE * ts
 
 	# Capim logo panel in front of the tooth, facing the approaching player (-Z)
 	var front_z: float = taabb.size.z * ts * 0.5 + 0.05
