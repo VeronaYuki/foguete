@@ -1,0 +1,11 @@
+# Godot cache/build artifacts
+.godot/
+
+# Claude photo-mode screenshots
+.shots/
+
+# Empty starter project (superseded — safe to delete)
+foguete/
+
+# macOS
+.DS_Store
