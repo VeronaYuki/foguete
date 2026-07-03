@@ -12,7 +12,12 @@ var sfx: Sfx
 var rocket: Node3D
 var rocket_vel := Vector2.ZERO
 var cam: Camera3D
-var moon: MeshInstance3D
+var moon: Node3D
+var _streaks: GPUParticles3D
+var _cine := false
+var _cine_look := Vector3(1, 3, 11)
+var _sun: DirectionalLight3D
+var _env: Environment
 
 var shields := 3
 var kills := 0
@@ -54,6 +59,9 @@ func _ready() -> void:
 	)
 	if OS.get_environment("FOGUETE_PHOTO") == "1":
 		_photo.call_deferred()
+	# atalho de dev: pula direto para a cinemática de pouso, sem jogar o jogo todo
+	if OS.get_environment("FOGUETE_ENDING") == "1":
+		_win.call_deferred()
 
 
 func _photo() -> void:
@@ -82,12 +90,14 @@ func _build_environment() -> void:
 	var we := WorldEnvironment.new()
 	we.environment = env
 	add_child(we)
+	_env = env
 
 	var sun := DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-25, 140, 0)
 	sun.light_color = Color(0.9, 0.9, 1.0)
 	sun.light_energy = 1.1
 	add_child(sun)
+	_sun = sun
 
 	# static starfield shell
 	var star_mesh := SphereMesh.new()
@@ -139,20 +149,29 @@ func _build_environment() -> void:
 	streaks.draw_pass_1 = smesh
 	streaks.position = Vector3(0, 0, 120)
 	add_child(streaks)
+	_streaks = streaks
 
-	# the Moon, far ahead
-	var moon_mesh := SphereMesh.new()
-	moon_mesh.radius = 42.0
-	moon_mesh.height = 84.0
-	var moon_mat := StandardMaterial3D.new()
-	moon_mat.albedo_color = Color(0.75, 0.75, 0.78)
-	moon_mat.roughness = 0.9
-	moon_mat.emission_enabled = true
-	moon_mat.emission = Color(0.4, 0.4, 0.45)
-	moon_mat.emission_energy_multiplier = 0.25
-	moon_mesh.material = moon_mat
-	moon = MeshInstance3D.new()
-	moon.mesh = moon_mesh
+	# the Moon, far ahead — usa o modelo real moon.glb se existir
+	moon = Node3D.new()
+	if ResourceLoader.exists("res://assets/moon.glb"):
+		var mscene: PackedScene = load("res://assets/moon.glb")
+		var minst := mscene.instantiate()
+		minst.scale = Vector3.ONE * 0.42   # raio ~100 -> ~42 (igual ao procedural antigo)
+		moon.add_child(minst)
+	else:
+		var moon_mesh := SphereMesh.new()
+		moon_mesh.radius = 42.0
+		moon_mesh.height = 84.0
+		var moon_mat := StandardMaterial3D.new()
+		moon_mat.albedo_color = Color(0.75, 0.75, 0.78)
+		moon_mat.roughness = 0.9
+		moon_mat.emission_enabled = true
+		moon_mat.emission = Color(0.4, 0.4, 0.45)
+		moon_mat.emission_energy_multiplier = 0.25
+		moon_mesh.material = moon_mat
+		var mi := MeshInstance3D.new()
+		mi.mesh = moon_mesh
+		moon.add_child(mi)
 	moon.position = Vector3(0, 6, 560)
 	add_child(moon)
 
@@ -361,6 +380,8 @@ func _process(delta: float) -> void:
 		else:
 			Flow.restart_phase()
 		return
+	if _cine and is_instance_valid(cam):
+		cam.look_at(_cine_look)
 	if state == "dead" or state == "won":
 		return
 	if state == "intro":
@@ -632,15 +653,406 @@ func _die() -> void:
 func _win() -> void:
 	state = "won"
 	Flow.finish()
-	sfx.play_chime()
 	sfx.set_thrust(0.0)
+	card_box.visible = false
+	_landing_cinematic()
+
+
+# ============================================================================
+#  CINEMÁTICA DE POUSO NA LUA  →  astronauta finca a bandeira Capim
+#  (pré-visualize só este trecho com:  FOGUETE_ENDING=1 godot --path .)
+# ============================================================================
+func _landing_cinematic() -> void:
+	# limpa o gameplay
+	for o in obstacles:
+		if is_instance_valid(o.node):
+			o.node.queue_free()
+	obstacles.clear()
+	for s in shots:
+		if is_instance_valid(s.node):
+			s.node.queue_free()
+	shots.clear()
+	for s in enemy_shots:
+		if is_instance_valid(s.node):
+			s.node.queue_free()
+	enemy_shots.clear()
+	if is_instance_valid(_streaks):
+		_streaks.emitting = false
+	if progress_bar.get_parent():
+		progress_bar.get_parent().visible = false  # esconde a barra + "DISTANCE TO MOON"
+	shield_label.visible = false
+	kills_label.visible = false
+
+	# cenário lunar + Terra ao fundo
+	_build_lunar_scene()
+	var astro := _build_astronaut()
+	astro.visible = false
+	var flag := _build_flag()
+	flag.visible = false
+
+	# foguete GRANDE, em pé, no alto, pronto pra descer (bico pra cima)
+	rocket.scale = Vector3.ONE * 1.7
+	rocket.rotation_degrees = Vector3(-90, 0, 0)
+	rocket.position = Vector3(4.0, 26.0, 13.0)
+	_deploy_landing_legs()
+
+	# durante o pouso já estamos NA Lua → esconde a Lua distante da fase de voo
+	if is_instance_valid(moon):
+		moon.visible = false
+
+	# câmera cinematográfica em 3/4 (aim contínuo via _cine_look no _process)
+	_cine = true
+	cam.position = Vector3(-13.0, 8.5, -1.0)
+	_cine_look = Vector3(2.0, 5.4, 12.5)
+	await get_tree().process_frame
+
+	# BEAT 1 — descida e pouso (~4.2s)
+	sfx.set_thrust(0.5)
+	var touchdown := Vector3(4.0, 4.1, 13.0)
+	var tw := create_tween()
+	tw.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tw.tween_property(rocket, "position", touchdown, 4.2)
+	var cw := create_tween()
+	cw.set_parallel(true)
+	cw.tween_property(cam, "position", Vector3(-10.5, 6.2, 3.0), 4.2)
+	cw.tween_property(self, "_cine_look", Vector3(2.4, 4.8, 12.8), 4.2)
+	await tw.finished
+	_dust_puff(Vector3(4.0, 0.2, 13.0))
+	_trauma = 0.6
+	sfx.set_thrust(0.0)
+	sfx.play_chime()
+	await get_tree().create_timer(0.9).timeout
+	await _shot("a_touchdown")
+
+	# BEAT 2 — astronauta sai da escotilha e desce ao solo (~2.5s)
+	astro.visible = true
+	astro.position = Vector3(5.0, 2.6, 12.0)
+	await _hop(astro, Vector3(3.4, 0.0, 11.0), 1.0, 0.65)
+	await _hop(astro, Vector3(1.4, 0.0, 10.4), 1.1, 0.65)
+
+	# aproxima a câmera pra enquadrar o astronauta + a bandeira
+	var cw2 := create_tween()
+	cw2.set_parallel(true)
+	cw2.tween_property(cam, "position", Vector3(-8.5, 4.4, 5.6), 1.1)
+	cw2.tween_property(self, "_cine_look", Vector3(-1.2, 2.2, 10.2), 1.1)
+
+	# BEAT 3 — anda até o ponto e finca a bandeira (~3s)
+	await _hop(astro, Vector3(-1.0, 0.0, 9.6), 1.1, 0.7)
+	# gira SUAVEMENTE pra encarar a câmera (antes virava de repente)
+	var cur_rot := astro.rotation
+	astro.look_at(Vector3(cam.position.x, astro.position.y, cam.position.z), Vector3.UP)
+	astro.rotate_y(deg_to_rad(180))   # corrige o eixo "frente" do modelo NASA
+	var face_rot := astro.rotation
+	astro.rotation = cur_rot
+	var rt := create_tween()
+	rt.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	rt.tween_property(astro, "rotation", face_rot, 0.8)
+	await rt.finished
+	# bandeira à esquerda do astronauta (lado da mão esquerda, que fica à direita da câmera)
+	flag.position = Vector3(-2.4, 0.0, 9.6)
+	flag.visible = true
+	flag.scale = Vector3(1.6, 0.03, 1.6)  # mastro crava e sobe
+	var fw := create_tween()
+	fw.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	fw.tween_property(flag, "scale", Vector3.ONE * 1.6, 0.9)
+	await fw.finished
+	# comemora com um pulinho de baixa gravidade
+	await _hop(astro, Vector3(-1.0, 0.0, 9.6), 2.0, 0.7)
+	await _shot("b_flag")
+
+	# BEAT 4 — card final com a foto do Eric
+	await get_tree().create_timer(0.6).timeout
+	_show_final_card()
+	await get_tree().create_timer(0.4).timeout
+	await _shot("c_card")
+
+
+func _shot(fname: String) -> void:
+	if OS.get_environment("FOGUETE_SHOT") != "1":
+		return
+	await RenderingServer.frame_post_draw
+	var dir := OS.get_environment("FOGUETE_SHOT_DIR")
+	if dir == "":
+		dir = "."
+	get_viewport().get_texture().get_image().save_png(dir + "/" + fname + ".png")
+
+
+func _deploy_landing_legs() -> void:
+	var vis := rocket.get_child(0) as Node3D
+	var leg_mat := StandardMaterial3D.new()
+	leg_mat.albedo_color = Color(0.2, 0.2, 0.22)
+	leg_mat.metallic = 0.7
+	for i in 3:
+		var ang := TAU * i / 3.0
+		var leg := BoxMesh.new()
+		leg.size = Vector3(0.09, 0.9, 0.09)
+		var l := _vis_mesh(vis, leg, leg_mat, Vector3(sin(ang) * 0.7, -1.55, cos(ang) * 0.7))
+		l.rotation = Vector3(cos(ang) * 0.5, 0.0, -sin(ang) * 0.5)
+		var foot := BoxMesh.new()
+		foot.size = Vector3(0.28, 0.08, 0.28)
+		_vis_mesh(vis, foot, leg_mat, Vector3(sin(ang) * 1.0, -1.95, cos(ang) * 1.0))
+
+
+func _build_lunar_scene() -> void:
+	# esconde as estrelas procedurais — a foto de fundo já traz espaço + Terra
+	for c in get_children():
+		if c is MultiMeshInstance3D:
+			c.visible = false
+
+	_apply_lunar_lighting()
+
+	# FUNDO realista: foto Lua+Terra como painel gigante atrás de tudo
+	if ResourceLoader.exists("res://assets/lua.jpg"):
+		var bg := MeshInstance3D.new()
+		var bq := QuadMesh.new()
+		bq.size = Vector2(900, 506)
+		bg.mesh = bq
+		var bmat := StandardMaterial3D.new()
+		bmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		bmat.albedo_texture = load("res://assets/lua.jpg")
+		bmat.billboard_mode = BaseMaterial3D.BILLBOARD_FIXED_Y
+		bmat.billboard_keep_scale = true
+		bg.mesh.material = bmat
+		bg.position = Vector3(0, -30, 235)
+		add_child(bg)
+
+	# solo de pouso: terreno real petavius (glb). Escalado e achatado p/ os atores ficarem no chão.
+	if ResourceLoader.exists("res://assets/petavius.glb"):
+		var pscene: PackedScene = load("res://assets/petavius.glb")
+		var terrain := pscene.instantiate()
+		terrain.scale = Vector3(120, 45, 120)   # largura ~265 u, relevo suave
+		terrain.position = Vector3(4, 0.5, 13)   # centro sob a área de pouso (y ajustável)
+		add_child(terrain)
+	else:
+		var ground_mat := StandardMaterial3D.new()
+		ground_mat.roughness = 1.0
+		if ResourceLoader.exists("res://assets/moon_ground.jpg"):
+			ground_mat.albedo_texture = load("res://assets/moon_ground.jpg")
+			ground_mat.uv1_scale = Vector3(5, 5, 5)
+		else:
+			ground_mat.albedo_color = Color(0.5, 0.48, 0.47)
+		var ground := MeshInstance3D.new()
+		var pm := PlaneMesh.new()
+		pm.size = Vector2(360, 360)
+		ground.mesh = pm
+		ground.material_override = ground_mat
+		ground.position = Vector3(0, 0, 30)
+		add_child(ground)
+
+
+# ---- BLOCO A: iluminação lunar estilo foto da Apollo ----
+func _apply_lunar_lighting() -> void:
+	if _env:
+		# ambiente baixo (lado escuro fundo, mas ainda legível); sem névoa; contraste fotográfico
+		_env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+		_env.ambient_light_color = Color(0.11, 0.12, 0.16)
+		_env.ambient_light_energy = 0.09           # sombras bem escuras = contraste Apollo
+		_env.fog_enabled = false
+		_env.tonemap_mode = Environment.TONE_MAPPER_ACES
+		_env.tonemap_exposure = 0.95
+		_env.tonemap_white = 6.0
+		_env.ssao_enabled = true          # oclusão de contato (sombras suaves nos cantos)
+		_env.ssao_radius = 1.5
+		_env.ssao_intensity = 1.8
+		_env.adjustment_enabled = true
+		_env.adjustment_contrast = 1.18
+		_env.adjustment_saturation = 1.06
+		# glow contido: só o mais brilhante floresce (evita o "flare" lavando a cena)
+		_env.glow_enabled = true
+		_env.glow_intensity = 0.5
+		_env.glow_bloom = 0.02
+		_env.glow_hdr_threshold = 1.3
+	if _sun:
+		# Sol único e forte, vindo de cima-frente-esquerda (lado da câmera):
+		# ilumina o lado visível dos objetos e joga sombras longas pra trás/direita.
+		_sun.look_at_from_position(Vector3(-16, 10, 2), Vector3(3, 0.5, 13), Vector3.UP)
+		_sun.light_color = Color(1.0, 0.97, 0.9)
+		_sun.light_energy = 1.6
+		_sun.shadow_enabled = true
+		_sun.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL
+		_sun.light_angular_distance = 0.15   # penumbra mínima = sombra nítida
+		_sun.shadow_blur = 0.4
+		_sun.shadow_bias = 0.03
+		_sun.directional_shadow_max_distance = 140.0
+	# fill fraco do lado da câmera pra os lados sombreados não virarem preto puro
+	var fill := DirectionalLight3D.new()
+	fill.look_at_from_position(Vector3(-10, 6, 0), Vector3(0, 1.5, 11), Vector3.UP)
+	fill.light_color = Color(0.7, 0.78, 0.95)
+	fill.light_energy = 0.18
+	fill.shadow_enabled = false
+	add_child(fill)
+	# rim/back light atrás do astronauta pra recortar a silhueta
+	var rim := OmniLight3D.new()
+	rim.position = Vector3(2.5, 6.0, 15.0)
+	rim.light_color = Color(0.55, 0.68, 1.0)
+	rim.light_energy = 3.0
+	rim.omni_range = 26.0
+	rim.omni_attenuation = 1.2
+	add_child(rim)
+
+
+func _build_astronaut() -> Node3D:
+	# BLOCO D — usa o modelo EVA da NASA (glTF) se existir; senão, o bonequinho de primitivas
+	if ResourceLoader.exists("res://assets/astronaut.glb"):
+		var scene: PackedScene = load("res://assets/astronaut.glb")
+		if scene:
+			var holder := Node3D.new()
+			var inst := scene.instantiate()
+			# modelo da NASA vem gigante (~74 u) → normaliza p/ ~3.4 u de altura
+			inst.scale = Vector3.ONE * 0.046
+			inst.position.y = 1.7   # apoia os pés no chão (ajuste fino depois de ver a pose)
+			holder.add_child(inst)
+			add_child(holder)
+			return holder
+
+	var a := Node3D.new()
+	add_child(a)
+	var suit := StandardMaterial3D.new()
+	suit.albedo_color = Color(0.93, 0.94, 0.96)
+	suit.roughness = 0.8
+	var dark := StandardMaterial3D.new()
+	dark.albedo_color = Color(0.1, 0.1, 0.12)
+	dark.metallic = 0.3
+	var visor := StandardMaterial3D.new()
+	visor.albedo_color = Color(0.15, 0.2, 0.28)
+	visor.metallic = 0.9
+	visor.roughness = 0.1
+	# torso
+	var torso := CapsuleMesh.new()
+	torso.radius = 0.32
+	torso.height = 1.0
+	_vis_mesh(a, torso, suit, Vector3(0, 0.85, 0))
+	# cabeça/capacete
+	var head := SphereMesh.new()
+	head.radius = 0.28
+	head.height = 0.56
+	_vis_mesh(a, head, suit, Vector3(0, 1.5, 0))
+	var vz := SphereMesh.new()
+	vz.radius = 0.2
+	vz.height = 0.4
+	_vis_mesh(a, vz, visor, Vector3(0, 1.5, 0.16))
+	# mochila
+	var pack := BoxMesh.new()
+	pack.size = Vector3(0.44, 0.6, 0.24)
+	_vis_mesh(a, pack, dark, Vector3(0, 0.95, -0.34))
+	# braços
+	for sx in [-1.0, 1.0]:
+		var arm := CapsuleMesh.new()
+		arm.radius = 0.11
+		arm.height = 0.7
+		var m := _vis_mesh(a, arm, suit, Vector3(sx * 0.42, 0.85, 0.05))
+		m.rotation_degrees = Vector3(10, 0, sx * 12)
+	# pernas
+	for sx in [-1.0, 1.0]:
+		var leg := CapsuleMesh.new()
+		leg.radius = 0.13
+		leg.height = 0.7
+		_vis_mesh(a, leg, suit, Vector3(sx * 0.16, 0.2, 0))
+	# botas
+	for sx in [-1.0, 1.0]:
+		var boot := BoxMesh.new()
+		boot.size = Vector3(0.22, 0.14, 0.34)
+		_vis_mesh(a, boot, dark, Vector3(sx * 0.16, -0.05, 0.06))
+	a.scale = Vector3.ONE * 1.9   # (antes era aplicado na cinemática)
+	return a
+
+
+func _build_flag() -> Node3D:
+	var f := Node3D.new()
+	add_child(f)
+	# mastro
+	var pole := CylinderMesh.new()
+	pole.top_radius = 0.045
+	pole.bottom_radius = 0.045
+	pole.height = 3.0
+	var pole_mat := StandardMaterial3D.new()
+	pole_mat.albedo_color = Color(0.85, 0.85, 0.9)
+	pole_mat.metallic = 0.8
+	_vis_mesh(f, pole, pole_mat, Vector3(0, 1.5, 0))
+	# pano com a bandeira Capim (imagem real), virado para a câmera; "voa" em +Z
+	var cloth := MeshInstance3D.new()
+	var q := QuadMesh.new()
+	q.size = Vector2(1.75, 1.12)
+	cloth.mesh = q
+	var cmat := StandardMaterial3D.new()
+	cmat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	cmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	if ResourceLoader.exists("res://assets/flag.png"):
+		cmat.albedo_texture = load("res://assets/flag.png")
+	else:
+		cmat.albedo_color = Color(1, 1, 1)
+	cloth.mesh.material = cmat
+	cloth.rotation_degrees = Vector3(0, -90, 0)
+	cloth.position = Vector3(0, 2.35, 0.95)
+	f.add_child(cloth)
+	return f
+
+
+func _dust_puff(pos: Vector3) -> void:
+	var p := GPUParticles3D.new()
+	p.amount = 90
+	p.lifetime = 1.4
+	p.one_shot = true
+	p.explosiveness = 0.85
+	p.local_coords = false
+	var pm := ParticleProcessMaterial.new()
+	pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+	pm.emission_sphere_radius = 0.6
+	pm.direction = Vector3(0, 0.3, 0)
+	pm.spread = 90.0
+	pm.initial_velocity_min = 3.0
+	pm.initial_velocity_max = 9.0
+	pm.gravity = Vector3(0, -1.5, 0)
+	pm.scale_min = 0.5
+	pm.scale_max = 1.4
+	pm.color = Color(0.7, 0.7, 0.72, 0.5)
+	p.process_material = pm
+	var mesh := SphereMesh.new()
+	mesh.radius = 0.25
+	mesh.height = 0.5
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_color = Color(0.72, 0.72, 0.75, 0.5)
+	mesh.material = mat
+	p.draw_pass_1 = mesh
+	add_child(p)
+	p.global_position = pos
+	p.emitting = true
+	get_tree().create_timer(2.0).timeout.connect(p.queue_free)
+
+
+# pulinho de baixa gravidade: move até to_pos com um arco de altura `up`
+func _hop(node: Node3D, to_pos: Vector3, up: float, dur: float) -> void:
+	var from := node.position
+	var tw := create_tween()
+	tw.set_parallel(true)
+	tw.tween_property(node, "position:x", to_pos.x, dur)
+	tw.tween_property(node, "position:z", to_pos.z, dur)
+	# arco vertical: sobe até o meio e desce
+	var up_tw := create_tween()
+	up_tw.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	up_tw.tween_property(node, "position:y", maxf(from.y, to_pos.y) + up, dur * 0.5)
+	up_tw.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	up_tw.tween_property(node, "position:y", to_pos.y, dur * 0.5)
+	await tw.finished
+
+
+func _show_final_card() -> void:
+	# foto do Eric acima do texto (some se o arquivo não existir)
+	if ResourceLoader.exists("res://assets/astronaut.png"):
+		var tr := TextureRect.new()
+		tr.texture = load("res://assets/astronaut.png")
+		tr.custom_minimum_size = Vector2(220, 220)
+		tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		tr.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+		card_box.add_child(tr)
+		card_box.move_child(tr, 0)
 	var mins := int(Flow.run_time) / 60
 	var secs := fmod(Flow.run_time, 60.0)
-	_show_card("THE MOON  ·  MISSION COMPLETE",
-		"full run  %d:%04.1f      total kills  %d\n\nyou escaped VH-9\n\npress R to play from the swamp" % [mins, secs, Flow.kills])
-	# gentle drift toward the moon
-	var tw := create_tween()
-	tw.tween_property(rocket, "position", Vector3(0, 2, 40), 6.0)
+	_show_card("MISSÃO CUMPRIDA",
+		"a bandeira da Capim está na Lua 🚀\n\ntempo  %d:%04.1f      abates  %d\n\naperte R para jogar de novo" % [mins, secs, Flow.kills])
 
 
 func _explode_at(pos: Vector3, scale_f: float) -> void:
