@@ -5,7 +5,7 @@ A three-phase sci-fi vertical slice built in **Godot 4.7** — 100% procedural: 
 ## The run (~3 minutes)
 
 1. **VH-9 · The Swamp** — first-person escape across a dark bioluminescent planet. Xenomorph-like creatures hunt you; find the rocket by its light beacon and get inside.
-2. **Pre-Launch Check** — two cockpit consoles: a color-sequence memory calibration and a program-the-probe logic puzzle (Robozzle-style). Solve both to ignite the engines.
+2. **Hangar Odonto — Pre-Launch Restoration** — the swamp landing damaged the tooth-ship. Restore it with three dental procedures: fill the hull cavities with amalgam pieces (shape-fit puzzle), rotate the root-canal segments to route reactor power to both root thrusters (pipe puzzle), and repeat the brushing protocol on the tooth to polish the enamel shield (memory sequence). The tooth visibly heals as you work; finish all three to launch.
 3. **Ascent** — third-person runner to the Moon. Dodge tumbling satellites and comets, shoot back at hostile ships, survive with 3 shields.
 
 ## Controls
@@ -13,7 +13,7 @@ A three-phase sci-fi vertical slice built in **Godot 4.7** — 100% procedural: 
 | Phase | Keys |
 |---|---|
 | Swamp | WASD move · SHIFT sprint · SPACE jump · Q dash · mouse aim · LMB fire · E interact |
-| Cockpit | mouse only |
+| Hangar | mouse only (right-click rotates an amalgam piece) |
 | Ascent | WASD **or head-lean** steer · **smile = 2s boost** · LMB or say **"PIU!"** to fire |
 | Everywhere | R restart phase · ESC quit |
 

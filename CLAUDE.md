@@ -26,7 +26,7 @@ Photo mode is the primary way to review visuals without playing — each of the 
 **Phase flow.** `scripts/flow.gd` is the only autoload (`Flow`). It holds run stats (`kills`, `run_time`) and switches phases via `goto_planet()` / `goto_cockpit()` / `goto_runner()`. The run sequence:
 
 1. `scenes/slime_planet.tscn` + `planet_main.gd` — Phase 1, FPS escape (main scene; calls `Flow.start_run()`)
-2. `scenes/cockpit.tscn` + `cockpit.gd` — Phase 2, 2D Control-based console puzzles (Simon memory game + Robozzle-style probe programming)
+2. `scenes/cockpit.tscn` + `cockpit.gd` — Phase 2, "hangar odonto": restore the damaged tooth-ship via three 2D Control-based dental puzzles (amalgam filling shape-fit, root-canal pipe routing, enamel-polish memory sequence played on the central tooth view)
 3. `scenes/runner.tscn` + `runner_main.gd` — Phase 3, third-person ascent runner (calls `Flow.finish()` and shows run stats)
 
 Phase transitions and restarts must go through `Flow` — its `_change()`/`restart_phase()` reset `Engine.time_scale` and the mouse mode, which phases mutate (slow-mo effects, mouse capture).
