@@ -3,7 +3,12 @@ extends Node3D
 
 const START_SPOT := { "pos": Vector2(0, -20), "height": 4.0, "radius": 8.0 }
 const ROCKET_SPOT := { "pos": Vector2(0, 175), "height": 6.0, "radius": 10.0 }
-const ALIEN_COUNT := 10
+const ALIEN_COUNT := 6
+const PART_DEFS := [
+	{ "name": "FUEL CELL", "pos": Vector2(-26, 55) },
+	{ "name": "NAV MODULE", "pos": Vector2(24, 105) },
+	{ "name": "ENGINE NOZZLE", "pos": Vector2(-14, 150) },
+]
 
 var terrain: Terrain
 var player: FPSPlayer
@@ -23,6 +28,10 @@ var card_sub: Label
 var _near_rocket := false
 var _game_over := false
 var _spores: GPUParticles3D
+var parts: Array[Dictionary] = []
+var parts_found := 0
+var toast_label: Label
+var _toast_t := 0.0
 
 
 func _ready() -> void:
@@ -31,6 +40,7 @@ func _ready() -> void:
 	_build_terrain()
 	_decorate()
 	_build_rocket()
+	_build_parts()
 	_build_player()
 	_spawn_aliens()
 	_build_hud()
@@ -38,7 +48,7 @@ func _ready() -> void:
 	add_child(sfx)
 
 	_show_card("VH-9  ·  THE SWAMP",
-		"Find your rocket.\nWASD move · SHIFT sprint · MOUSE aim · LMB fire · E interact")
+		"Your ship is missing 3 parts — recover them (amber beacons), then launch.\nWASD move · SHIFT sprint · SPACE jump · Q dash · LMB fire · E interact")
 	get_tree().create_timer(5.0).timeout.connect(func () -> void:
 		if not _game_over:
 			_fade_card()
@@ -378,6 +388,148 @@ func _build_rocket() -> void:
 	root.add_child(glow)
 
 
+func _build_parts() -> void:
+	var pedestal_mat := StandardMaterial3D.new()
+	pedestal_mat.albedo_color = Color(0.1, 0.11, 0.13)
+	pedestal_mat.metallic = 0.7
+	pedestal_mat.roughness = 0.4
+
+	for i in PART_DEFS.size():
+		var def: Dictionary = PART_DEFS[i]
+		var root := Node3D.new()
+		add_child(root)
+		var h := terrain.get_height(def.pos.x, def.pos.y)
+		root.global_position = Vector3(def.pos.x, h, def.pos.y)
+
+		var pedestal := BoxMesh.new()
+		pedestal.size = Vector3(0.8, 0.25, 0.8)
+		var pd := MeshInstance3D.new()
+		pd.mesh = pedestal
+		pd.material_override = pedestal_mat
+		pd.position = Vector3(0, 0.12, 0)
+		root.add_child(pd)
+
+		var item := Node3D.new()
+		item.position = Vector3(0, 1.1, 0)
+		root.add_child(item)
+		_build_part_item(item, i)
+
+		# amber beacon column
+		var beacon := SpotLight3D.new()
+		beacon.position = Vector3(0, 0.4, 0)
+		beacon.rotation_degrees = Vector3(90, 0, 0)
+		beacon.spot_range = 70.0
+		beacon.spot_angle = 5.0
+		beacon.light_energy = 14.0
+		beacon.light_color = Color(1.0, 0.72, 0.25)
+		beacon.light_volumetric_fog_energy = 8.0
+		beacon.shadow_enabled = false
+		root.add_child(beacon)
+
+		var glow := OmniLight3D.new()
+		glow.position = Vector3(0, 1.2, 0)
+		glow.omni_range = 9.0
+		glow.light_energy = 1.4
+		glow.light_color = Color(1.0, 0.72, 0.25)
+		root.add_child(glow)
+
+		var shaft_mesh := CylinderMesh.new()
+		shaft_mesh.top_radius = 0.5
+		shaft_mesh.bottom_radius = 0.2
+		shaft_mesh.height = 26.0
+		var shaft_mat := StandardMaterial3D.new()
+		shaft_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		shaft_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		shaft_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+		shaft_mat.albedo_color = Color(1.0, 0.72, 0.25, 0.09)
+		shaft_mesh.material = shaft_mat
+		var shaft := MeshInstance3D.new()
+		shaft.mesh = shaft_mesh
+		shaft.position = Vector3(0, 13.5, 0)
+		root.add_child(shaft)
+
+		parts.append({ "root": root, "item": item, "name": def.name, "found": false, "idx": i })
+
+
+func _build_part_item(item: Node3D, idx: int) -> void:
+	var metal := StandardMaterial3D.new()
+	metal.albedo_color = Color(0.7, 0.72, 0.78)
+	metal.metallic = 0.8
+	metal.roughness = 0.3
+	var dark := StandardMaterial3D.new()
+	dark.albedo_color = Color(0.16, 0.16, 0.18)
+	dark.metallic = 0.7
+	dark.roughness = 0.4
+
+	match idx:
+		0:  # fuel cell — canister with glowing green band
+			var can := CylinderMesh.new()
+			can.top_radius = 0.22
+			can.bottom_radius = 0.22
+			can.height = 0.55
+			_item_mesh(item, can, metal, Vector3.ZERO)
+			var band := CylinderMesh.new()
+			band.top_radius = 0.23
+			band.bottom_radius = 0.23
+			band.height = 0.13
+			var glow := StandardMaterial3D.new()
+			glow.albedo_color = Color(0.02, 0.05, 0.02)
+			glow.emission_enabled = true
+			glow.emission = Color(0.3, 1.0, 0.4)
+			glow.emission_energy_multiplier = 2.5
+			band.material = glow
+			var b := MeshInstance3D.new()
+			b.mesh = band
+			item.add_child(b)
+		1:  # nav module — gyroscope sphere with ring
+			var core := SphereMesh.new()
+			core.radius = 0.18
+			core.height = 0.36
+			var cg := StandardMaterial3D.new()
+			cg.albedo_color = Color(0.02, 0.04, 0.06)
+			cg.emission_enabled = true
+			cg.emission = Color(0.3, 0.9, 1.0)
+			cg.emission_energy_multiplier = 2.2
+			core.material = cg
+			var c := MeshInstance3D.new()
+			c.mesh = core
+			item.add_child(c)
+			var ring := TorusMesh.new()
+			ring.inner_radius = 0.26
+			ring.outer_radius = 0.31
+			var r := _item_mesh(item, ring, metal, Vector3.ZERO)
+			r.rotation_degrees = Vector3(35, 0, 20)
+		2:  # engine nozzle — bell with hot core
+			var bell := CylinderMesh.new()
+			bell.top_radius = 0.13
+			bell.bottom_radius = 0.3
+			bell.height = 0.42
+			_item_mesh(item, bell, dark, Vector3.ZERO)
+			var hot := SphereMesh.new()
+			hot.radius = 0.12
+			hot.height = 0.24
+			var hg := StandardMaterial3D.new()
+			hg.albedo_color = Color(0.06, 0.02, 0.0)
+			hg.emission_enabled = true
+			hg.emission = Color(1.0, 0.5, 0.15)
+			hg.emission_energy_multiplier = 2.5
+			hot.material = hg
+			var hm := MeshInstance3D.new()
+			hm.mesh = hot
+			hm.position = Vector3(0, -0.12, 0)
+			hm.scale = Vector3(1, 0.5, 1)
+			item.add_child(hm)
+
+
+func _item_mesh(parent: Node3D, mesh: Mesh, mat: Material, pos: Vector3) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	mi.mesh = mesh
+	mi.material_override = mat
+	mi.position = pos
+	parent.add_child(mi)
+	return mi
+
+
 func _build_player() -> void:
 	player = FPSPlayer.new()
 	add_child(player)
@@ -449,6 +601,13 @@ func _build_hud() -> void:
 	objective.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	root.add_child(objective)
 
+	toast_label = _mk_label("", 22, Color(1.0, 0.85, 0.4))
+	toast_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	toast_label.position = Vector2(0, 66)
+	toast_label.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	toast_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	root.add_child(toast_label)
+
 	prompt = _mk_label("[E]  ENTER ROCKET", 30, Color(0.4, 1.0, 0.9))
 	prompt.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
 	prompt.position = Vector2(0, -160)
@@ -515,6 +674,7 @@ func _photo_mode() -> void:
 		{ "pos": a0 + Vector3(2.6, 1.9, 2.6), "look": a0 + Vector3(0, 1.2, 0) },
 		{ "pos": rocket_pos + Vector3(10, 7, -18), "look": rocket_pos + Vector3(0, 3, 0) },
 		{ "pos": player.global_position + Vector3(-1.2, 1.7, 1.8), "look": player.global_position + Vector3(-0.3, 1.3, 0.5) },
+		{ "pos": (parts[0].root as Node3D).global_position + Vector3(2.4, 2.0, 2.4), "look": (parts[0].root as Node3D).global_position + Vector3(0, 1.1, 0) },
 	]
 	for i in shots.size():
 		cam.global_position = shots[i].pos
@@ -526,6 +686,13 @@ func _photo_mode() -> void:
 	get_tree().quit()
 
 
+func _toast(text: String, color := Color(1.0, 0.85, 0.4)) -> void:
+	toast_label.text = text
+	toast_label.add_theme_color_override("font_color", color)
+	toast_label.modulate.a = 1.0
+	_toast_t = 3.0
+
+
 func _process(_delta: float) -> void:
 	if Input.is_action_just_pressed("quit"):
 		get_tree().quit()
@@ -535,13 +702,54 @@ func _process(_delta: float) -> void:
 	if _game_over or player == null:
 		return
 
+	# toast fade
+	if _toast_t > 0.0:
+		_toast_t -= _delta
+		if _toast_t <= 0.8:
+			toast_label.modulate.a = maxf(_toast_t / 0.8, 0.0)
+
+	# floating part items + pickup
+	var t := Time.get_ticks_msec() / 1000.0
+	for p in parts:
+		if p.found:
+			continue
+		var item: Node3D = p.item
+		item.position.y = 1.1 + sin(t * 2.0 + p.idx * 2.1) * 0.12
+		item.rotation.y += _delta * 1.2
+		if player.global_position.distance_to((p.root as Node3D).global_position) < 3.0:
+			p.found = true
+			parts_found += 1
+			sfx.play_chime()
+			_toast("%s SECURED  —  %d/%d" % [p.name, parts_found, PART_DEFS.size()])
+			(p.root as Node3D).queue_free()
+
+	var total := PART_DEFS.size()
 	var d := player.global_position.distance_to(rocket_pos)
-	objective.text = "FIND THE ROCKET  —  %0.0f m" % d
-	_near_rocket = d < 7.0
+	if parts_found < total:
+		var nearest := 1e9
+		for p in parts:
+			if not p.found:
+				nearest = minf(nearest, player.global_position.distance_to((p.root as Node3D).global_position))
+		objective.text = "RECOVER SHIP PARTS  %d/%d  —  nearest beacon %0.0f m" % [parts_found, total, nearest]
+	else:
+		objective.text = "ALL PARTS SECURED  —  ROCKET  %0.0f m" % d
+
+	_near_rocket = d < 8.0
 	prompt.visible = _near_rocket
+	if _near_rocket:
+		if parts_found < total:
+			prompt.text = "MISSING  %d  PARTS" % (total - parts_found)
+			prompt.add_theme_color_override("font_color", Color(1.0, 0.6, 0.3))
+		else:
+			prompt.text = "[E]  INSTALL PARTS & ENTER"
+			prompt.add_theme_color_override("font_color", Color(0.4, 1.0, 0.9))
 	if _near_rocket and Input.is_action_just_pressed("interact"):
-		_game_over = true
-		Flow.goto_cockpit()
+		if parts_found < total:
+			sfx.play_hurt()
+			_toast("the ship won't fly without all parts", Color(1.0, 0.5, 0.4))
+		else:
+			_game_over = true
+			Flow.goto_cockpit()
 
 	# low health heartbeat vignette
 	if player.hp < 30.0 and not player.dead:

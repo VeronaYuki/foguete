@@ -3,7 +3,7 @@ extends CharacterBody3D
 
 signal killed(pos: Vector3)
 
-const CHASE_RANGE := 42.0
+const CHASE_RANGE := 36.0
 const ATTACK_RANGE := 2.7
 const SPEED_WANDER := 2.2
 const SPEED_CHASE := 5.6
@@ -68,18 +68,42 @@ func _build_body() -> void:
 	teeth_mat.albedo_color = Color(0.85, 0.82, 0.7)
 	teeth_mat.roughness = 0.4
 
-	# hunched spine: hips low, chest high
-	_sphere(chitin, 0.40, Vector3(0, 1.02, -0.38), Vector3(1.0, 0.85, 1.15))
-	_sphere(chitin, 0.42, Vector3(0, 1.32, 0.12), Vector3(1.0, 0.9, 1.2))
-	_sphere(chitin, 0.34, Vector3(0, 1.5, 0.45), Vector3(1.0, 0.85, 1.0))
+	# smooth spine: overlapping spheres rising from hips to shoulders
+	var spine := [
+		[Vector3(0, 0.95, -0.55), 0.30],
+		[Vector3(0, 1.05, -0.20), 0.36],
+		[Vector3(0, 1.18, 0.15), 0.40],
+		[Vector3(0, 1.32, 0.45), 0.36],
+		[Vector3(0, 1.45, 0.62), 0.24],
+	]
+	for s in spine:
+		_sphere(chitin, s[1], s[0], Vector3(0.95, 0.8, 1.1))
+
+	# ribbed carapace rings around the torso
+	for i in 3:
+		var rib := TorusMesh.new()
+		rib.inner_radius = 0.3
+		rib.outer_radius = 0.4
+		var r := _mesh(rib, chitin, Vector3(0, 1.14 + i * 0.07, -0.05 + i * 0.22))
+		r.rotation_degrees = Vector3(78, 0, 0)
+		r.scale = Vector3(0.95, 1.0, 0.72)
 
 	# long smooth cranium sweeping back over the shoulders
 	var head := CapsuleMesh.new()
-	head.radius = 0.26
-	head.height = 1.9
-	var head_mi := _mesh(head, chitin, Vector3(0, 1.72, 0.3))
-	head_mi.rotation_degrees = Vector3(100, 0, 0)
-	head_mi.scale = Vector3(0.72, 1.0, 0.88)
+	head.radius = 0.24
+	head.height = 2.0
+	var head_mi := _mesh(head, chitin, Vector3(0, 1.62, 0.62))
+	head_mi.rotation_degrees = Vector3(102, 0, 0)
+	head_mi.scale = Vector3(0.68, 1.0, 0.78)
+
+	# dorsal back-tubes
+	for i in 3:
+		var tube := CylinderMesh.new()
+		tube.top_radius = 0.035
+		tube.bottom_radius = 0.055
+		tube.height = 0.5 - i * 0.06
+		var tb := _mesh(tube, chitin, Vector3(0, 1.5 - i * 0.06, -0.05 - i * 0.24))
+		tb.rotation_degrees = Vector3(-128, 0, 0)
 
 	# curved side mandibles
 	for side in [-1.0, 1.0]:
@@ -87,110 +111,106 @@ func _build_body() -> void:
 		mand.top_radius = 0.0
 		mand.bottom_radius = 0.035
 		mand.height = 0.34
-		var mm := _mesh(mand, chitin, Vector3(0.16 * side, 1.44, 1.12))
+		var mm := _mesh(mand, chitin, Vector3(0.15 * side, 1.4, 1.28))
 		mm.rotation_degrees = Vector3(105, 0, -18.0 * side)
 
 	# jaw with teeth
 	var jaw := BoxMesh.new()
-	jaw.size = Vector3(0.17, 0.09, 0.34)
-	_mesh(jaw, chitin, Vector3(0, 1.5, 1.02))
+	jaw.size = Vector3(0.16, 0.08, 0.36)
+	_mesh(jaw, chitin, Vector3(0, 1.45, 1.22))
 	for i in 4:
 		var tooth := CylinderMesh.new()
 		tooth.top_radius = 0.0
-		tooth.bottom_radius = 0.016
-		tooth.height = 0.07
-		var t := _mesh(tooth, teeth_mat, Vector3(-0.06 + 0.04 * i, 1.44, 1.14))
+		tooth.bottom_radius = 0.014
+		tooth.height = 0.06
+		var t := _mesh(tooth, teeth_mat, Vector3(-0.055 + 0.037 * i, 1.4, 1.34))
 		t.rotation_degrees = Vector3(180, 0, 0)
 
-	# eye slits
+	# faint eye slits low on the crest
 	for side in [-1.0, 1.0]:
 		var eye := BoxMesh.new()
-		eye.size = Vector3(0.1, 0.025, 0.06)
-		var e := _mesh(eye, eye_mat, Vector3(0.13 * side, 1.64, 1.05))
-		e.rotation_degrees = Vector3(0, 0, 12.0 * side)
-
-	# dorsal spikes
-	for i in 4:
-		var spike := CylinderMesh.new()
-		spike.top_radius = 0.0
-		spike.bottom_radius = 0.05
-		spike.height = 0.34 - i * 0.04
-		var s := _mesh(spike, chitin, Vector3(0, 1.52 - i * 0.09, 0.2 - i * 0.24))
-		s.rotation_degrees = Vector3(-38, 0, 0)
+		eye.size = Vector3(0.09, 0.02, 0.05)
+		var e := _mesh(eye, eye_mat, Vector3(0.12 * side, 1.56, 1.24))
+		e.rotation_degrees = Vector3(0, 0, 10.0 * side)
 
 	# four two-segment legs
 	var defs := [
-		[Vector3(0.34, 1.42, 0.32), 0.0],
-		[Vector3(-0.34, 1.42, 0.32), 1.0],
-		[Vector3(0.36, 1.05, -0.5), 2.0],
-		[Vector3(-0.36, 1.05, -0.5), 3.0],
+		Vector3(0.3, 1.3, 0.4),
+		Vector3(-0.3, 1.3, 0.4),
+		Vector3(0.3, 1.0, -0.35),
+		Vector3(-0.3, 1.0, -0.35),
 	]
-	for d in defs:
-		var at: Vector3 = d[0]
+	for at in defs:
 		var side := signf(at.x)
 		var pivot := Node3D.new()
 		pivot.position = at
 		_vis.add_child(pivot)
 		_leg_pivots.append(pivot)
 
-		# spider silhouette: upper segment arcs UP and out, knee above the back
+		# digitigrade silhouette: upper arcs up-out, knee above the back
 		var upper := CylinderMesh.new()
-		upper.top_radius = 0.075
-		upper.bottom_radius = 0.05
-		upper.height = 0.85
+		upper.top_radius = 0.06
+		upper.bottom_radius = 0.045
+		upper.height = 0.8
 		var u := MeshInstance3D.new()
 		u.mesh = upper
 		u.material_override = chitin
-		u.rotation_degrees = Vector3(0, 0, -55.0 * side)
-		u.position = Vector3(0.33 * side, 0.24, 0)
+		u.rotation_degrees = Vector3(0, 0, -50.0 * side)
+		u.position = Vector3(0.3 * side, 0.26, 0)
 		pivot.add_child(u)
+		# knee cap
+		var cap_m := SphereMesh.new()
+		cap_m.radius = 0.07
+		cap_m.height = 0.14
+		var kc := MeshInstance3D.new()
+		kc.mesh = cap_m
+		kc.material_override = chitin
+		kc.position = Vector3(0.61 * side, 0.51, 0)
+		pivot.add_child(kc)
 
 		var knee := Node3D.new()
-		knee.position = Vector3(0.68 * side, 0.48, 0)
+		knee.position = Vector3(0.61 * side, 0.51, 0)
 		pivot.add_child(knee)
 		var lower := CylinderMesh.new()
-		lower.top_radius = 0.05
-		lower.bottom_radius = 0.015
-		lower.height = 1.7
+		lower.top_radius = 0.04
+		lower.bottom_radius = 0.012
+		lower.height = 1.75
 		var l := MeshInstance3D.new()
 		l.mesh = lower
 		l.material_override = chitin
-		l.rotation_degrees = Vector3(0, 0, -166.0 * side)
-		l.position = Vector3(0.2 * side, -0.82, 0)
+		l.rotation_degrees = Vector3(0, 0, -168.0 * side)
+		l.position = Vector3(0.16 * side, -0.86, 0)
 		knee.add_child(l)
 
-	# tail: arcs up and back, ends in a blade
+	# segmented tail arcing up and back, ends in a blade
 	_tail_pivot = Node3D.new()
-	_tail_pivot.position = Vector3(0, 1.05, -0.62)
-	_tail_pivot.rotation_degrees = Vector3(-45, 0, 0)
+	_tail_pivot.position = Vector3(0, 1.0, -0.7)
+	_tail_pivot.rotation_degrees = Vector3(-42, 0, 0)
 	_vis.add_child(_tail_pivot)
-	var t1 := CapsuleMesh.new()
-	t1.radius = 0.09
-	t1.height = 0.95
-	var t1m := MeshInstance3D.new()
-	t1m.mesh = t1
-	t1m.material_override = chitin
-	t1m.rotation_degrees = Vector3(90, 0, 0)
-	t1m.position = Vector3(0, 0, -0.45)
-	_tail_pivot.add_child(t1m)
-	var t2m := MeshInstance3D.new()
-	var t2 := CapsuleMesh.new()
-	t2.radius = 0.055
-	t2.height = 0.85
-	t2m.mesh = t2
-	t2m.material_override = chitin
-	t2m.rotation_degrees = Vector3(72, 0, 0)
-	t2m.position = Vector3(0, 0.18, -1.15)
-	_tail_pivot.add_child(t2m)
+	var seg_defs := [
+		[0.09, 0.8, Vector3(0, 0, -0.38), -8.0],
+		[0.07, 0.7, Vector3(0, 0.1, -0.95), -22.0],
+		[0.05, 0.6, Vector3(0, 0.28, -1.42), -38.0],
+	]
+	for sd in seg_defs:
+		var seg := CapsuleMesh.new()
+		seg.radius = sd[0]
+		seg.height = sd[1]
+		var sm := MeshInstance3D.new()
+		sm.mesh = seg
+		sm.material_override = chitin
+		sm.rotation_degrees = Vector3(90.0 + sd[3], 0, 0)
+		sm.position = sd[2]
+		_tail_pivot.add_child(sm)
 	var blade := CylinderMesh.new()
 	blade.top_radius = 0.0
 	blade.bottom_radius = 0.05
-	blade.height = 0.4
+	blade.height = 0.45
 	var bm := MeshInstance3D.new()
 	bm.mesh = blade
 	bm.material_override = chitin
-	bm.rotation_degrees = Vector3(55, 0, 0)
-	bm.position = Vector3(0, 0.42, -1.5)
+	bm.rotation_degrees = Vector3(38, 0, 0)
+	bm.position = Vector3(0, 0.55, -1.72)
 	_tail_pivot.add_child(bm)
 
 	# eerie underglow so the silhouette reads in the dark
