@@ -64,6 +64,8 @@ func _ready() -> void:
 	visor.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var vmat := ShaderMaterial.new()
 	vmat.shader = load("res://shaders/helmet_visor.gdshader")
+	# tween_property can't see a shader parameter that was never set
+	vmat.set_shader_parameter("strength", 0.92)
 	visor.material = vmat
 	root.add_child(visor)
 

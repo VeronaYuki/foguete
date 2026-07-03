@@ -18,7 +18,7 @@ func _ready() -> void:
 	if OS.get_environment("FOGUETE_PHOTO_MENU") == "1":
 		get_tree().create_timer(1.0).timeout.connect(func () -> void:
 			await RenderingServer.frame_post_draw
-			get_viewport().get_texture().get_image().save_png("/Users/verona/Documents/foguete/.shots/menu.png")
+			get_viewport().get_texture().get_image().save_png("res://.shots/menu.png")
 			get_tree().quit()
 		)
 
