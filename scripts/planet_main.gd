@@ -71,7 +71,7 @@ func _ready() -> void:
 	if OS.get_environment("FOGUETE_PHOTO_GUN") == "1":
 		get_tree().create_timer(1.0).timeout.connect(func () -> void:
 			await RenderingServer.frame_post_draw
-			get_viewport().get_texture().get_image().save_png("/Users/verona/Documents/foguete/.shots/gun.png")
+			get_viewport().get_texture().get_image().save_png("res://.shots/gun.png")
 			get_tree().quit()
 		)
 		return
@@ -95,7 +95,7 @@ func _ready() -> void:
 	if OS.get_environment("FOGUETE_PHOTO_GUS") == "1":
 		get_tree().create_timer(1.6).timeout.connect(func () -> void:
 			await RenderingServer.frame_post_draw
-			get_viewport().get_texture().get_image().save_png("/Users/verona/Documents/foguete/.shots/gus.png")
+			get_viewport().get_texture().get_image().save_png("res://.shots/gus.png")
 			get_tree().quit()
 		)
 		return
@@ -789,7 +789,7 @@ func _photo_mode() -> void:
 		await get_tree().create_timer(0.9).timeout
 		await RenderingServer.frame_post_draw
 		var img := get_viewport().get_texture().get_image()
-		img.save_png("/Users/verona/Documents/foguete/.shots/p%d.png" % i)
+		img.save_png("res://.shots/p%d.png" % i)
 	get_tree().quit()
 
 
@@ -924,7 +924,7 @@ func _photo_boss() -> void:
 	cam.look_at(bp + Vector3(0, 2.0, 0))
 	await get_tree().create_timer(0.4).timeout
 	await RenderingServer.frame_post_draw
-	get_viewport().get_texture().get_image().save_png("/Users/verona/Documents/foguete/.shots/boss.png")
+	get_viewport().get_texture().get_image().save_png("res://.shots/boss.png")
 	get_tree().quit()
 
 

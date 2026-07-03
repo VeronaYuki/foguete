@@ -107,10 +107,10 @@ func _photo() -> void:
 	card_box.visible = false
 	await get_tree().create_timer(3.0).timeout
 	await RenderingServer.frame_post_draw
-	get_viewport().get_texture().get_image().save_png("/Users/verona/Documents/foguete/.shots/runner1.png")
+	get_viewport().get_texture().get_image().save_png("res://.shots/runner1.png")
 	await get_tree().create_timer(4.0).timeout
 	await RenderingServer.frame_post_draw
-	get_viewport().get_texture().get_image().save_png("/Users/verona/Documents/foguete/.shots/runner2.png")
+	get_viewport().get_texture().get_image().save_png("res://.shots/runner2.png")
 	get_tree().quit()
 
 
