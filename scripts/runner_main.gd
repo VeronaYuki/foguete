@@ -783,7 +783,7 @@ func _hit_player() -> void:
 		return
 	_invuln = 1.0
 	shields -= 1
-	sfx.play_hurt()
+	sfx.play_crash()
 	_trauma = 1.0
 	vignette.color.a = 0.4
 	var tw := create_tween()
@@ -799,7 +799,7 @@ func _hit_player() -> void:
 func _die() -> void:
 	state = "dead"
 	_explode_at(rocket.position, 4.0)
-	sfx.play_explosion()
+	sfx.play_ship_explosion()
 	sfx.set_thrust(0.0)
 	rocket.visible = false
 	_show_card("SHIP DESTROYED", "so close…\n\npress R to relaunch")
