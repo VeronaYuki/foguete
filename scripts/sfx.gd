@@ -21,6 +21,7 @@ var screech: AudioStreamPlayer
 var splat: AudioStreamPlayer
 var tones: Array[AudioStreamPlayer] = []
 var tick: AudioStreamPlayer
+var drill: AudioStreamPlayer
 var voice: AudioStreamPlayer
 var radio: AudioStreamPlayer
 var whoosh: AudioStreamPlayer
@@ -48,6 +49,7 @@ func _ready() -> void:
 	for f in freqs:
 		tones.append(_mk_player(_gen_tone(f), -8.0, false))
 	tick = _mk_player(_gen_tone(1200.0, 0.06), -14.0, false)
+	drill = _mk_player(_gen_drill(), -10.0, false)
 	voice = _mk_player(_gen_voice_blip(), -13.0, false)
 	radio = _mk_player(_gen_radio_crackle(), -12.0, false)
 	var boost_wav := _load_wav("res://audio/rocket_boost.wav")
@@ -116,6 +118,11 @@ func play_tone(i: int) -> void:
 
 func play_tick() -> void:
 	tick.play()
+
+
+func play_drill(pitch := 1.0) -> void:
+	drill.pitch_scale = pitch
+	drill.play()
 
 
 func play_voice(pitch: float) -> void:
@@ -343,6 +350,22 @@ func _gen_boost() -> AudioStreamWAV:
 		phase += TAU * lerpf(90.0, 340.0, k * k) / RATE
 		var env := minf(t * 10.0, 1.0) * exp(-1.8 * t)
 		out[i] = clampf((lp * 0.8 + sin(phase) * 0.5) * env, -1.0, 1.0)
+	return _make_wav(out, false)
+
+
+func _gen_drill() -> AudioStreamWAV:
+	# dental drill burst — high wobbling whine over a buzzy motor
+	var n := int(RATE * 0.22)
+	var out := PackedFloat32Array()
+	out.resize(n)
+	var phase := 0.0
+	for i in n:
+		var t := float(i) / RATE
+		var env := minf(t * 25.0, 1.0) * exp(-7.0 * t)
+		var f := 2600.0 + 300.0 * sin(TAU * 18.0 * t)
+		phase += TAU * f / RATE
+		var s := sin(phase) * 0.5 + signf(sin(TAU * 130.0 * t)) * 0.18
+		out[i] = s * env * 0.7
 	return _make_wav(out, false)
 
 
