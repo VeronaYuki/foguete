@@ -1,11 +1,12 @@
 class_name CaptainBriefing
 extends CanvasLayer
-## Helmet-HUD foreground: Capitão Gus radios the player their orders.
-## Portuguese subtitles typed out with a synthesized radio voice.
+## Helmet-HUD comms transmission: a character radios the player, with a
+## portrait, typewriter Portuguese subtitles, and a synthesized radio voice.
+## Defaults to Capitão Gus; reusable for any speaker via setup().
 
 signal finished
 
-const LINES := [
+const GUS_LINES := [
 	"Aqui é o Capitão Gus. Está me ouvindo, recruta?",
 	"Seu foguete caiu no pântano de VH-9.",
 	"A nave perdeu 3 peças no impacto. Recupere todas — siga as balizas âmbar.",
@@ -13,6 +14,11 @@ const LINES := [
 	"Se ver QUALQUER COISA parecida com o Lucas Djin... atire ou fuja. Não hesite.",
 	"Instale as peças, decole e volte pra órbita. Boa sorte. Câmbio.",
 ]
+
+var lines: Array = GUS_LINES
+var speaker := "CAPITÃO GUS"
+var portrait_path := "res://assets/gus.png"
+var banner := "TRANSMISSÃO AO VIVO — CAPITÃO GUS"
 
 var sfx: Sfx
 var _line := 0
@@ -32,8 +38,16 @@ var portrait: TextureRect
 var _rec_blink := 0.0
 
 
-func setup(p_sfx: Sfx) -> void:
+func setup(p_sfx: Sfx, p_lines: Array = [], p_speaker := "", p_portrait := "", p_banner := "") -> void:
 	sfx = p_sfx
+	if not p_lines.is_empty():
+		lines = p_lines
+	if p_speaker != "":
+		speaker = p_speaker
+	if p_portrait != "":
+		portrait_path = p_portrait
+	if p_banner != "":
+		banner = p_banner
 
 
 func _ready() -> void:
@@ -66,7 +80,7 @@ func _ready() -> void:
 	dot_sb.set_corner_radius_all(8)
 	rec_dot.add_theme_stylebox_override("panel", dot_sb)
 	top.add_child(rec_dot)
-	top.add_child(_lbl("TRANSMISSÃO AO VIVO — CAPITÃO GUS", 18, Color(0.6, 0.85, 1.0)))
+	top.add_child(_lbl(banner, 18, Color(0.6, 0.85, 1.0)))
 
 	# comms panel bottom-left: portrait + name + subtitle
 	var panel := PanelContainer.new()
@@ -100,7 +114,7 @@ func _ready() -> void:
 	frame.add_theme_stylebox_override("panel", fsb)
 	row.add_child(frame)
 	portrait = TextureRect.new()
-	portrait.texture = load("res://assets/gus.png")
+	portrait.texture = load(portrait_path)
 	portrait.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
 	portrait.custom_minimum_size = Vector2(150, 180)
 	portrait.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
@@ -110,7 +124,7 @@ func _ready() -> void:
 	text_col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	text_col.add_theme_constant_override("separation", 8)
 	row.add_child(text_col)
-	name_label = _lbl("CAPITÃO GUS", 24, Color(1.0, 0.8, 0.3))
+	name_label = _lbl(speaker, 24, Color(1.0, 0.8, 0.3))
 	text_col.add_child(name_label)
 	subtitle = _lbl("", 22, Color(0.92, 0.95, 1.0))
 	subtitle.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -152,7 +166,7 @@ func _process(delta: float) -> void:
 
 	# advance / complete current line (SPACE or E)
 	if Input.is_action_just_pressed("jump") or Input.is_action_just_pressed("interact"):
-		var full: String = LINES[_line]
+		var full: String = lines[_line]
 		if _shown < full.length():
 			_shown = full.length()
 			subtitle.text = full
@@ -160,7 +174,7 @@ func _process(delta: float) -> void:
 			_next_line()
 		return
 
-	var line: String = LINES[_line]
+	var line: String = lines[_line]
 	if _shown < line.length():
 		_char_t += delta
 		_blip_t += delta
@@ -181,7 +195,7 @@ func _process(delta: float) -> void:
 
 func _next_line() -> void:
 	_line += 1
-	if _line >= LINES.size():
+	if _line >= lines.size():
 		_finish()
 	else:
 		_start_line()

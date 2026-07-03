@@ -1195,20 +1195,21 @@ func _hop(node: Node3D, to_pos: Vector3, up: float, dur: float) -> void:
 
 
 func _show_final_card() -> void:
-	# foto do Eric acima do texto (some se o arquivo não existir)
-	if ResourceLoader.exists("res://assets/astronaut.png"):
-		var tr := TextureRect.new()
-		tr.texture = load("res://assets/astronaut.png")
-		tr.custom_minimum_size = Vector2(220, 220)
-		tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		tr.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-		card_box.add_child(tr)
-		card_box.move_child(tr, 0)
+	# Eric transmite dos controles — mesmo estilo do Capitão Gus na abertura
 	var mins := int(Flow.run_time) / 60
 	var secs := fmod(Flow.run_time, 60.0)
-	_show_card("MISSÃO CUMPRIDA",
-		"a bandeira da Capim está na Lua 🚀\n\ntempo  %d:%04.1f      abates  %d\n\naperte R para jogar de novo" % [mins, secs, Flow.kills])
+	var eric_lines := [
+		"Aqui é o Eric, do Controle da Missão. Você conseguiu, recruta!",
+		"A bandeira da Capim está fincada na Lua. História feita.",
+		"Missão concluída em %d:%04.1f, com %d abates. Impecável." % [mins, secs, Flow.kills],
+		"Agora relaxe e curta a vista. Aperte R pra viver tudo de novo. Câmbio.",
+	]
+	if is_instance_valid(hud):
+		hud.visible = false
+	var eric := CaptainBriefing.new()
+	eric.setup(sfx, eric_lines, "ERIC — CONTROLE DA MISSÃO",
+		"res://assets/astronaut.png", "TRANSMISSÃO AO VIVO — CONTROLE DA MISSÃO")
+	add_child(eric)
 
 
 func _explode_at(pos: Vector3, scale_f: float) -> void:
