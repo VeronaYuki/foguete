@@ -316,22 +316,6 @@ func _build_rocket() -> void:
 		taabb.position.z + taabb.size.z * 0.5)
 	holder.scale = Vector3.ONE * ts
 
-	# Capim logo panel in front of the tooth, facing the approaching player (-Z)
-	var front_z: float = taabb.size.z * ts * 0.5 + 0.05
-	var logo_mat := StandardMaterial3D.new()
-	logo_mat.albedo_texture = load("res://assets/capim.png")
-	logo_mat.emission_enabled = true
-	logo_mat.emission_texture = load("res://assets/capim.png")
-	logo_mat.emission_energy_multiplier = 0.35
-	var logo := QuadMesh.new()
-	logo.size = Vector2(1.1, 1.1)
-	var lmi := MeshInstance3D.new()
-	lmi.mesh = logo
-	lmi.material_override = logo_mat
-	lmi.position = Vector3(0, -0.2, -front_z)
-	lmi.rotation_degrees = Vector3(0, 180, 0)
-	root.add_child(lmi)
-
 	# engine glow beneath the roots
 	var eng := OmniLight3D.new()
 	eng.position = Vector3(0, -2.1, 0)
