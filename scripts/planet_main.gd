@@ -36,6 +36,7 @@ func _ready() -> void:
 	_build_hud()
 	sfx = Sfx.new()
 	add_child(sfx)
+	_start_music()
 
 	_show_card("VH-9  ·  THE SWAMP",
 		"Find your rocket.\nWASD move · SHIFT sprint · MOUSE aim · LMB fire · E interact")
@@ -46,6 +47,16 @@ func _ready() -> void:
 
 	if OS.get_environment("FOGUETE_PHOTO") == "1":
 		_photo_mode.call_deferred()
+
+
+func _start_music() -> void:
+	var stream: AudioStreamMP3 = load("res://audio/Moonbound.mp3")
+	stream.loop = true
+	var music := AudioStreamPlayer.new()
+	music.stream = stream
+	music.volume_db = -8.0
+	add_child(music)
+	music.play()
 
 
 func _build_environment() -> void:

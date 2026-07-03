@@ -7,17 +7,30 @@ const BOUNDS_Y_MIN := -8.0
 const BOUNDS_Y_MAX := 11.0
 const MOVE_SPEED := 14.0
 const FIRE_CD := 0.18
+const BOOST_TIME := 2.0
+const BOOST_MULT := 1.9
+const BOOST_COOLDOWN := 1.2
+const FACE_GAIN := 1.6
+const FACE_DEADZONE := 0.12
 
 var sfx: Sfx
+var face: FaceControl
+var voice: VoiceControl
 var rocket: Node3D
 var rocket_vel := Vector2.ZERO
 var cam: Camera3D
 var moon: Node3D
+var eng_light: OmniLight3D
+var exhaust_pm: ParticleProcessMaterial
 var _streaks: GPUParticles3D
 var _cine := false
 var _cine_look := Vector3(1, 3, 11)
 var _sun: DirectionalLight3D
 var _env: Environment
+
+var boost_t := 0.0
+var boost_cd := 0.0
+var speed_mult := 1.0
 
 var shields := 3
 var kills := 0
@@ -41,6 +54,10 @@ var card_box: VBoxContainer
 var card_title: Label
 var card_sub: Label
 var vignette: ColorRect
+var face_label: Label
+var boost_label: Label
+var preview_box: Control
+var mic_label: Label
 
 
 func _ready() -> void:
@@ -48,10 +65,17 @@ func _ready() -> void:
 	sfx = Sfx.new()
 	add_child(sfx)
 	sfx.set_thrust(0.55)
+	_start_music()
+	face = FaceControl.new()
+	add_child(face)
+	face.smile_started.connect(_boost)
+	voice = VoiceControl.new()
+	add_child(voice)
+	voice.piu_detected.connect(_voice_fire)
 	_build_environment()
 	_build_rocket()
 	_build_hud()
-	_show_card("ASCENT", "WASD steer · LMB fire\nsurvive to the Moon")
+	_show_card("ASCENT", "WASD or head-lean steer · LMB or \"PIU!\" fires\nSMILE to boost · survive to the Moon")
 	get_tree().create_timer(2.5).timeout.connect(func () -> void:
 		if state == "intro":
 			state = "flying"
@@ -62,6 +86,16 @@ func _ready() -> void:
 	# atalho de dev: pula direto para a cinemática de pouso, sem jogar o jogo todo
 	if OS.get_environment("FOGUETE_ENDING") == "1":
 		_win.call_deferred()
+
+
+func _start_music() -> void:
+	var stream: AudioStreamMP3 = load("res://audio/Moonreach.mp3")
+	stream.loop = true
+	var music := AudioStreamPlayer.new()
+	music.stream = stream
+	music.volume_db = -8.0
+	add_child(music)
+	music.play()
 
 
 func _photo() -> void:
@@ -261,7 +295,9 @@ func _build_rocket() -> void:
 	exhaust.draw_pass_1 = pmesh
 	rocket.add_child(exhaust)
 
-	var eng_light := OmniLight3D.new()
+	exhaust_pm = pm
+
+	eng_light = OmniLight3D.new()
 	eng_light.position = Vector3(0, 0, -2.0)
 	eng_light.light_color = Color(0.4, 0.7, 1.0)
 	eng_light.light_energy = 3.0
@@ -308,6 +344,53 @@ func _build_hud() -> void:
 	kills_label.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
 	kills_label.position = Vector2(-160, -50)
 	root.add_child(kills_label)
+
+	face_label = _mk_label("FACE  —", 15, Color(0.55, 0.6, 0.7))
+	face_label.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	face_label.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	face_label.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	face_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	face_label.position.y -= 46
+	root.add_child(face_label)
+
+	mic_label = _mk_label("MIC", 15, Color(0.55, 0.6, 0.7))
+	mic_label.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	mic_label.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	mic_label.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	mic_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	mic_label.position.y -= 70
+	root.add_child(mic_label)
+
+	boost_label = _mk_label("BOOST!", 46, Color(1.0, 0.75, 0.2))
+	boost_label.set_anchors_preset(Control.PRESET_CENTER)
+	boost_label.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	boost_label.grow_vertical = Control.GROW_DIRECTION_BOTH
+	boost_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	boost_label.position.y += 130
+	boost_label.visible = false
+	root.add_child(boost_label)
+
+	# webcam preview, bottom-right
+	preview_box = Control.new()
+	preview_box.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	preview_box.position = Vector2(-248, -248)
+	preview_box.size = Vector2(228, 172)
+	preview_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	preview_box.visible = false
+	root.add_child(preview_box)
+	var frame_bg := ColorRect.new()
+	frame_bg.color = Color(0.4, 0.5, 0.7, 0.6)
+	frame_bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	frame_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	preview_box.add_child(frame_bg)
+	var preview_rect := TextureRect.new()
+	preview_rect.texture = face.preview_texture
+	preview_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	preview_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	preview_rect.position = Vector2(2, 2)
+	preview_rect.size = Vector2(224, 168)
+	preview_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	preview_box.add_child(preview_rect)
 
 	var pv := VBoxContainer.new()
 	pv.set_anchors_preset(Control.PRESET_CENTER_TOP)
@@ -387,8 +470,14 @@ func _process(delta: float) -> void:
 	if state == "intro":
 		return
 
+	# boost (smile-triggered) scales how fast the world streams past
+	boost_t = maxf(boost_t - delta, 0.0)
+	boost_cd = maxf(boost_cd - delta, 0.0)
+	speed_mult = lerpf(speed_mult, BOOST_MULT if boost_t > 0.0 else 1.0, 1.0 - exp(-6.0 * delta))
+	_boost_fx()
+
 	# progress + difficulty
-	progress = minf(progress + delta / RUN_TIME, 1.0)
+	progress = minf(progress + delta * speed_mult / RUN_TIME, 1.0)
 	progress_bar.value = progress
 	moon.position.z = lerpf(560.0, 80.0, progress)
 	if progress >= 1.0:
@@ -397,15 +486,72 @@ func _process(delta: float) -> void:
 
 	_move_rocket(delta)
 	_shoot(delta)
-	_spawn(delta)
-	_step_world(delta)
+	_spawn(delta * speed_mult)
+	_step_world(delta * speed_mult)
 	_camera(delta)
+	_face_hud()
 	_invuln = maxf(_invuln - delta, 0.0)
+
+
+func _boost() -> void:
+	if state != "flying" or boost_t > 0.0 or boost_cd > 0.0:
+		return
+	boost_t = BOOST_TIME
+	boost_cd = BOOST_TIME + BOOST_COOLDOWN
+	sfx.play_boost()
+	boost_label.visible = true
+	boost_label.modulate.a = 1.0
+	var tw := create_tween()
+	tw.tween_property(boost_label, "modulate:a", 0.0, BOOST_TIME)
+	tw.tween_callback(func () -> void: boost_label.visible = false)
+
+
+func _boost_fx() -> void:
+	var bf := (speed_mult - 1.0) / (BOOST_MULT - 1.0)
+	eng_light.light_energy = 3.0 + 6.0 * bf
+	exhaust_pm.initial_velocity_min = 26.0 * (1.0 + bf)
+	exhaust_pm.initial_velocity_max = 36.0 * (1.0 + bf)
+	sfx.set_thrust(0.55 + 0.4 * bf)
+
+
+func _face_hud() -> void:
+	preview_box.visible = face.preview_active
+	if voice.mic_alive:
+		var blocks := clampi(int(voice.level * 10.0), 0, 10)
+		mic_label.text = "MIC  %s%s  say PIU! to fire" % ["▮".repeat(blocks), "▯".repeat(10 - blocks)]
+		mic_label.add_theme_color_override("font_color",
+			Color(1.0, 0.8, 0.3) if blocks >= 3 else Color(0.5, 0.95, 0.7))
+	else:
+		mic_label.text = "MIC  ✗  no microphone"
+		mic_label.add_theme_color_override("font_color", Color(0.55, 0.6, 0.7))
+	if not face.active:
+		face_label.text = "FACE  —  no face in view · WASD"
+		face_label.add_theme_color_override("font_color", Color(0.55, 0.6, 0.7))
+	elif boost_t > 0.0:
+		face_label.text = "FACE  ✓  BOOSTING"
+		face_label.add_theme_color_override("font_color", Color(1.0, 0.8, 0.3))
+	elif boost_cd > 0.0:
+		face_label.text = "FACE  ✓  boost recharging…"
+		face_label.add_theme_color_override("font_color", Color(0.6, 0.7, 0.85))
+	else:
+		face_label.text = "FACE  ✓  lean to steer · SMILE to boost"
+		face_label.add_theme_color_override("font_color", Color(0.5, 0.95, 0.7))
+
+
+func _face_axis(v: float) -> float:
+	if absf(v) < FACE_DEADZONE:
+		return 0.0
+	return (v - signf(v) * FACE_DEADZONE) / (1.0 - FACE_DEADZONE)
 
 
 func _move_rocket(delta: float) -> void:
 	var in2 := Input.get_vector("move_left", "move_right", "move_fwd", "move_back")
-	rocket_vel = rocket_vel.lerp(Vector2(-in2.x, -in2.y) * MOVE_SPEED, 1.0 - exp(-8.0 * delta))
+	var steer := Vector2(-in2.x, -in2.y)
+	if face.active:
+		# camera looks down +Z, so screen-right is world -X
+		steer += Vector2(-_face_axis(face.head.x), _face_axis(face.head.y)) * FACE_GAIN
+	steer = steer.limit_length(1.0)
+	rocket_vel = rocket_vel.lerp(steer * MOVE_SPEED, 1.0 - exp(-8.0 * delta))
 	rocket.position.x = clampf(rocket.position.x + rocket_vel.x * delta, -BOUNDS_X, BOUNDS_X)
 	rocket.position.y = clampf(rocket.position.y + rocket_vel.y * delta, BOUNDS_Y_MIN, BOUNDS_Y_MAX)
 	# banking
@@ -416,12 +562,21 @@ func _move_rocket(delta: float) -> void:
 func _shoot(delta: float) -> void:
 	_fire_cd -= delta
 	if Input.is_action_pressed("fire") and _fire_cd <= 0.0:
-		_fire_cd = FIRE_CD
-		sfx.play_laser()
-		var s := _orb(Color(0.3, 1.0, 0.85), 0.3)
-		add_child(s)
-		s.global_position = rocket.position + Vector3(0, 0, 2.2)
-		shots.append({ "node": s, "vel": Vector3(0, 0, 130) })
+		_fire_shot()
+
+
+func _voice_fire() -> void:
+	if state == "flying" and _fire_cd <= 0.0:
+		_fire_shot()
+
+
+func _fire_shot() -> void:
+	_fire_cd = FIRE_CD
+	sfx.play_laser()
+	var s := _orb(Color(0.3, 1.0, 0.85), 0.3)
+	add_child(s)
+	s.global_position = rocket.position + Vector3(0, 0, 2.2)
+	shots.append({ "node": s, "vel": Vector3(0, 0, 130) })
 
 
 func _spawn(delta: float) -> void:
@@ -1106,6 +1261,7 @@ func _camera(delta: float) -> void:
 	var sh := _trauma * _trauma
 	var desired := Vector3(rocket.position.x * 0.6, 6.5 + rocket.position.y * 0.5, -14)
 	cam.position = cam.position.lerp(desired, 1.0 - exp(-5.0 * delta))
+	cam.fov = lerpf(cam.fov, lerpf(75.0, 90.0, (speed_mult - 1.0) / (BOOST_MULT - 1.0)), 1.0 - exp(-5.0 * delta))
 	cam.look_at(rocket.position + Vector3(0, 2.5, 22))
 	cam.h_offset = rng.randf_range(-1, 1) * 0.4 * sh
 	cam.v_offset = rng.randf_range(-1, 1) * 0.4 * sh
