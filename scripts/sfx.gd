@@ -16,6 +16,7 @@ var screech: AudioStreamPlayer
 var splat: AudioStreamPlayer
 var tones: Array[AudioStreamPlayer] = []
 var tick: AudioStreamPlayer
+var whoosh: AudioStreamPlayer
 
 
 func _ready() -> void:
@@ -33,6 +34,7 @@ func _ready() -> void:
 	for f in freqs:
 		tones.append(_mk_player(_gen_tone(f), -8.0, false))
 	tick = _mk_player(_gen_tone(1200.0, 0.06), -14.0, false)
+	whoosh = _mk_player(_gen_boost(), -4.0, false)
 	thruster.play()
 	drone.play()
 
@@ -83,6 +85,10 @@ func play_tone(i: int) -> void:
 
 func play_tick() -> void:
 	tick.play()
+
+
+func play_boost() -> void:
+	whoosh.play()
 
 
 func _mk_player(stream: AudioStream, vol_db: float, _loop: bool) -> AudioStreamPlayer:
@@ -237,6 +243,24 @@ func _gen_tone(freq: float, dur := 0.35) -> AudioStreamWAV:
 	for i in n:
 		var t := float(i) / RATE
 		out[i] = sin(TAU * freq * t) * 0.35 * minf(t * 40.0, 1.0) * exp(-4.0 * t)
+	return _make_wav(out, false)
+
+
+func _gen_boost() -> AudioStreamWAV:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 2020
+	var n := int(RATE * 1.0)
+	var out := PackedFloat32Array()
+	out.resize(n)
+	var lp := 0.0
+	var phase := 0.0
+	for i in n:
+		var t := float(i) / RATE
+		var k := float(i) / n
+		lp += (rng.randf_range(-1.0, 1.0) - lp) * lerpf(0.08, 0.5, k)
+		phase += TAU * lerpf(90.0, 340.0, k * k) / RATE
+		var env := minf(t * 10.0, 1.0) * exp(-1.8 * t)
+		out[i] = clampf((lp * 0.8 + sin(phase) * 0.5) * env, -1.0, 1.0)
 	return _make_wav(out, false)
 
 
