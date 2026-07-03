@@ -14,8 +14,24 @@ A three-phase sci-fi vertical slice built in **Godot 4.7** — 100% procedural: 
 |---|---|
 | Swamp | WASD move · SHIFT sprint · SPACE jump · Q dash · mouse aim · LMB fire · E interact |
 | Cockpit | mouse only |
-| Ascent | WASD steer · LMB fire |
+| Ascent | WASD **or head-lean** steer · **smile = 2s boost** · LMB or say **"PIU!"** to fire |
 | Everywhere | R restart phase · ESC quit |
+
+### Face control (Ascent)
+
+Phase 3 can be flown with your webcam: lean your head to steer the rocket and **smile to trigger a 2-second boost**. A live mirror preview with the tracking overlay shows in the bottom-right of the HUD so you can see where your head is. A small Python tracker (`tools/face_tracker.py`) reads the webcam with OpenCV and streams head position + smile state (UDP 46464) plus JPEG preview frames (UDP 46465) to the game. The game launches it automatically when it can; you can also run it by hand to watch the tracking status:
+
+```sh
+python3 -m venv ~/.local/share/foguete/venv
+~/.local/share/foguete/venv/bin/pip install "opencv-python-headless==4.*"
+~/.local/share/foguete/venv/bin/python tools/face_tracker.py
+```
+
+Hold your head still for a second at startup — that pose is calibrated as "fly straight". The HUD shows `FACE ✓` when tracking is live; without a tracker or a visible face the phase falls back to WASD.
+
+### Voice fire (Ascent)
+
+Say **"PIU!"** to shoot. This one is fully in-engine: `voice_control.gd` captures the microphone through an `AudioEffectCapture` on a silenced bus and fires on short, loud, high-pitched bursts (adaptive noise floor + zero-crossing gate — no speech model). The mouse button always works too.
 
 ## Running it
 
