@@ -159,18 +159,7 @@ func _decorate() -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 77
 
-	# dark rock formations — break up the terrain and give the player cover
-	var rock_mesh := SphereMesh.new()
-	rock_mesh.radius = 1.0
-	rock_mesh.height = 2.0
-	var rock_mat := StandardMaterial3D.new()
-	rock_mat.albedo_color = Color(0.07, 0.09, 0.1)
-	rock_mat.roughness = 0.85
-	rock_mesh.material = rock_mat
-	var rock_scale := func (r: RandomNumberGenerator) -> Vector3:
-		var s: float = r.randf_range(1.5, 5.0)
-		return Vector3(s * r.randf_range(0.8, 1.3), s * 0.7, s * r.randf_range(0.8, 1.3))
-	_scatter(rng, rock_mesh, 70, 0.6, rock_scale, -0.4)
+	_scatter_rocks(rng)
 
 	# drifting spores around the player
 	var spores := GPUParticles3D.new()
@@ -206,28 +195,68 @@ func _decorate() -> void:
 	_spores = spores
 
 
-func _scatter(rng: RandomNumberGenerator, mesh: Mesh, count: int, min_ny: float,
-		scale_fn: Callable, y_off: float) -> void:
-	var transforms: Array[Transform3D] = []
-	for i in count * 4:
-		if transforms.size() >= count:
+func _scatter_rocks(rng: RandomNumberGenerator) -> void:
+	# solid rock formations with collision, kept clear of the parts, the
+	# rocket, the start, and the corridor the player walks to reach them
+	var rock_mat := StandardMaterial3D.new()
+	rock_mat.albedo_color = Color(0.07, 0.09, 0.1)
+	rock_mat.roughness = 0.85
+
+	var clear_spots: Array = [
+		{ "p": START_SPOT.pos, "r": 12.0 },
+		{ "p": ROCKET_SPOT.pos, "r": 16.0 },
+	]
+	for d in PART_DEFS:
+		clear_spots.append({ "p": d.pos, "r": 10.0 })
+	var path := [Vector2(0, -20), Vector2(-15, 60), Vector2(10, 120), Vector2(0, 175)]
+
+	var placed := 0
+	for i in 500:
+		if placed >= 55:
 			break
 		var x := rng.randf_range(Terrain.X_MIN + 10, Terrain.X_MAX - 10)
 		var z := rng.randf_range(Terrain.Z_MIN + 10, Terrain.Z_MAX - 10)
-		if terrain.get_normal(x, z).y < min_ny:
+		var p := Vector2(x, z)
+		if terrain.get_normal(x, z).y < 0.6:
 			continue
-		var s: Vector3 = scale_fn.call(rng)
-		var b := Basis(Vector3.UP, rng.randf() * TAU).scaled(s)
-		transforms.append(Transform3D(b, Vector3(x, terrain.get_height(x, z) + y_off, z)))
-	var mm := MultiMesh.new()
-	mm.transform_format = MultiMesh.TRANSFORM_3D
-	mm.mesh = mesh
-	mm.instance_count = transforms.size()
-	for i in transforms.size():
-		mm.set_instance_transform(i, transforms[i])
-	var mmi := MultiMeshInstance3D.new()
-	mmi.multimesh = mm
-	add_child(mmi)
+		var blocked := false
+		for s in clear_spots:
+			if p.distance_to(s.p) < s.r:
+				blocked = true
+				break
+		if blocked or _dist_to_path(p, path) < 9.0:
+			continue
+
+		var scl := rng.randf_range(1.6, 4.5)
+		var body := StaticBody3D.new()
+		add_child(body)
+		body.global_position = Vector3(x, terrain.get_height(x, z) - 0.4, z)
+		body.rotation.y = rng.randf() * TAU
+		var mesh := SphereMesh.new()
+		mesh.radius = 1.0
+		mesh.height = 2.0
+		var mi := MeshInstance3D.new()
+		mi.mesh = mesh
+		mi.material_override = rock_mat
+		mi.scale = Vector3(scl * rng.randf_range(0.8, 1.3), scl * 0.7, scl * rng.randf_range(0.8, 1.3))
+		body.add_child(mi)
+		var col := CollisionShape3D.new()
+		var shape := SphereShape3D.new()
+		shape.radius = scl * 0.85
+		col.shape = shape
+		body.add_child(col)
+		placed += 1
+
+
+func _dist_to_path(p: Vector2, path: Array) -> float:
+	var best := 1e9
+	for i in path.size() - 1:
+		var a: Vector2 = path[i]
+		var b: Vector2 = path[i + 1]
+		var ab := b - a
+		var t := clampf((p - a).dot(ab) / maxf(ab.length_squared(), 0.001), 0.0, 1.0)
+		best = minf(best, p.distance_to(a + ab * t))
+	return best
 
 
 func _build_rocket() -> void:
@@ -246,98 +275,35 @@ func _build_rocket() -> void:
 	col.shape = cyl
 	root.add_child(col)
 
-	# tooth rocket — Capim is a dental company, so the ship is a giant molar
-	var enamel := StandardMaterial3D.new()
-	enamel.albedo_color = Color(0.97, 0.97, 0.94)
-	enamel.roughness = 0.2
-	enamel.metallic = 0.0
-	var ivory := StandardMaterial3D.new()
-	ivory.albedo_color = Color(0.9, 0.86, 0.74)
-	ivory.roughness = 0.4
-	var dark := StandardMaterial3D.new()
-	dark.albedo_color = Color(0.13, 0.13, 0.16)
-	dark.metallic = 0.7
+	# imported tooth model — the ship is a giant molar (Capim = dental co.)
+	var tooth_mesh := load("res://tooth/source/DenteJpeg/Dente.obj") as Mesh
+	var tmi := MeshInstance3D.new()
+	tmi.mesh = tooth_mesh
+	var taabb := tooth_mesh.get_aabb()
+	var ts := 3.8 / maxf(taabb.size.y, 0.001)
+	tmi.scale = Vector3.ONE * ts
+	tmi.position = -taabb.get_center() * ts
+	# apply the tooth texture if the OBJ import didn't carry a material
+	if tooth_mesh.get_surface_count() > 0 and tooth_mesh.surface_get_material(0) == null:
+		var tm := StandardMaterial3D.new()
+		tm.albedo_texture = load("res://tooth/source/DenteJpeg/Dente.jpg")
+		tm.roughness = 0.4
+		tmi.material_override = tm
+	root.add_child(tmi)
 
-	var warm_glow := StandardMaterial3D.new()
-	warm_glow.albedo_color = Color(0.05, 0.04, 0.02)
-	warm_glow.emission_enabled = true
-	warm_glow.emission = Color(1.0, 0.75, 0.4)
-	warm_glow.emission_energy_multiplier = 2.5
-
-	# crown — bulbous enamel body
-	var crown := SphereMesh.new()
-	crown.radius = 0.82
-	crown.height = 1.5
-	var cr := MeshInstance3D.new()
-	cr.mesh = crown
-	cr.material_override = enamel
-	cr.position = Vector3(0, 0.5, 0)
-	cr.scale = Vector3(1.05, 1.05, 0.95)
-	root.add_child(cr)
-
-	# rounded cusps on the biting surface
-	for cx in [-0.34, 0.34]:
-		for cz in [-0.3, 0.3]:
-			var cusp := SphereMesh.new()
-			cusp.radius = 0.32
-			cusp.height = 0.55
-			var cu := MeshInstance3D.new()
-			cu.mesh = cusp
-			cu.material_override = enamel
-			cu.position = Vector3(cx, 1.12, cz)
-			root.add_child(cu)
-
-	# neck tapering into the roots
-	var neck := SphereMesh.new()
-	neck.radius = 0.62
-	neck.height = 0.9
-	var nk := MeshInstance3D.new()
-	nk.mesh = neck
-	nk.material_override = enamel
-	nk.position = Vector3(0, -0.35, 0)
-	root.add_child(nk)
-
-	# two tapering roots planted in the swamp (also read as landing legs)
-	for rx in [-0.34, 0.34]:
-		var rootcone := CylinderMesh.new()
-		rootcone.top_radius = 0.4
-		rootcone.bottom_radius = 0.04
-		rootcone.height = 1.6
-		var rc := MeshInstance3D.new()
-		rc.mesh = rootcone
-		rc.material_override = ivory
-		rc.position = Vector3(rx, -1.4, 0)
-		rc.rotation.z = -signf(rx) * 0.16
-		root.add_child(rc)
-
-	# hatch + glowing window on the front (the side the player approaches, -Z)
-	var hatch := BoxMesh.new()
-	hatch.size = Vector3(0.4, 0.55, 0.1)
-	var hmi := MeshInstance3D.new()
-	hmi.mesh = hatch
-	hmi.material_override = dark
-	hmi.position = Vector3(0, 0.05, -0.74)
-	root.add_child(hmi)
-	var win := BoxMesh.new()
-	win.size = Vector3(0.24, 0.14, 0.04)
-	var wmi := MeshInstance3D.new()
-	wmi.mesh = win
-	wmi.material_override = warm_glow
-	wmi.position = Vector3(0, 0.24, -0.8)
-	root.add_child(wmi)
-
-	# Capim logo panel on the crown, facing the player
+	# Capim logo panel in front of the tooth, facing the approaching player (-Z)
+	var front_z: float = taabb.size.z * ts * 0.5 + 0.05
 	var logo_mat := StandardMaterial3D.new()
 	logo_mat.albedo_texture = load("res://assets/capim.png")
 	logo_mat.emission_enabled = true
 	logo_mat.emission_texture = load("res://assets/capim.png")
 	logo_mat.emission_energy_multiplier = 0.35
 	var logo := QuadMesh.new()
-	logo.size = Vector2(0.66, 0.66)
+	logo.size = Vector2(1.1, 1.1)
 	var lmi := MeshInstance3D.new()
 	lmi.mesh = logo
 	lmi.material_override = logo_mat
-	lmi.position = Vector3(0, 0.66, -0.79)
+	lmi.position = Vector3(0, -0.2, -front_z)
 	lmi.rotation_degrees = Vector3(0, 180, 0)
 	root.add_child(lmi)
 

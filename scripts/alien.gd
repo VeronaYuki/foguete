@@ -31,10 +31,9 @@ var _model_holder: Node3D
 
 const LUCAS_TEX := "res://assets/lucas.png"
 const TARGET_HEIGHT := 2.0
-# downloaded 3D hunters — picked at random per spawn
+# downloaded 3D hunter model
 const ENEMY_GLBS := [
 	"res://bald-cartoon-casual-male-character/source/Unnamed project.glb",
-	"res://walter-white/source/walter white.glb",
 ]
 
 
